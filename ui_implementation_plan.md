@@ -637,4 +637,43 @@ Once all critical bugs are fixed, consider implementing:
 1. Enhanced visualization for influence changes
 2. Better faction relationship management UI
 3. Improved map visualization with more interactive features
-4. Action history and review capabilities 
+4. Action history and review capabilities
+
+## GitHub Integration
+
+### Repository Setup
+
+The project has been successfully integrated with GitHub and is now available in a public repository. This enables version control, collaboration, and public sharing of the TTRPG Faction Manager.
+
+#### Implementation:
+
+1. **Repository Creation**:
+   - Created a new repository at https://github.com/Cormacsb/TTRPG-Faction_manager
+   - Set up the repository with a comprehensive README.md and .gitignore
+   - Added a requirements.txt file to document dependencies
+
+2. **Initial Code Upload**:
+   - Initialized a git repository locally
+   - Added all project files to version control
+   - Created the initial commit with the complete codebase
+   - Pushed the code to the GitHub remote repository
+
+3. **Documentation Improvements**:
+   - Added detailed project description in README.md
+   - Included installation and usage instructions
+   - Referenced the specifications directory for in-depth documentation
+
+#### Benefits:
+
+- **Version Control**: Changes can now be tracked, reverted, and managed properly
+- **Collaboration**: Multiple contributors can work on the project
+- **Discoverability**: The project is publicly available for other GMs to find and use
+- **Issue Tracking**: Bug reports and feature requests can be managed through GitHub issues
+- **Future Expansion**: Enables organized feature branching and pull request workflows
+
+#### Future Plans:
+
+- Add example screenshots to the README.md to showcase the application
+- Create a more detailed Wiki with usage examples and tutorials
+- Configure GitHub Actions for CI/CD to run tests automatically
+- Consider creating releases for stable versions 
