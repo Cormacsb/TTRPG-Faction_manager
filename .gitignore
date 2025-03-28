@@ -56,4 +56,8 @@ ehthumbs.db
 Desktop.ini
 
 # macOS
-.DS_Store 
+.DS_Store
+
+# Project specific
+maps/
+src/maps/ 
