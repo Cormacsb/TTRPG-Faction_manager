@@ -40,8 +40,8 @@ class MonitoringManager:
             logging.info(f"[MONITOR_MAIN] Starting monitoring processing for turn {turn_number}")
             results = {
                 "agent_monitoring": self.process_agent_monitoring(turn_number),
-                "squadron_monitoring": self.process_squadron_monitoring(turn_number),
-                "passive_monitoring": self.process_passive_monitoring(turn_number)
+                "squadron_monitoring": self.process_squadron_monitoring(turn_number)
+                # Passive monitoring is handled separately in the turn resolution process
             }
             logging.info(f"[MONITOR_MAIN] Monitoring results: {results}")
             return results
@@ -1229,6 +1229,8 @@ class MonitoringManager:
             list: List of discovered rumor IDs.
         """
         try:
+            logging.info(f"Processing rumor discovery for district {district.id}, faction {faction_id}, roll {roll_result}")
+            
             # Get all rumors in the district
             query = """
                 SELECT id, discovery_dc, rumor_text
@@ -1239,6 +1241,7 @@ class MonitoringManager:
             rumors = self.db_manager.execute_query(query, {"district_id": district.id})
             
             if not rumors:
+                logging.info(f"No rumors found in district {district.id}")
                 return []
             
             # Get list of rumors already known by the faction
@@ -1251,11 +1254,16 @@ class MonitoringManager:
             known_rumors = self.db_manager.execute_query(query, {"faction_id": faction_id})
             known_rumor_ids = [row["rumor_id"] for row in known_rumors]
             
+            logging.info(f"Found {len(known_rumors)} rumors already known by faction {faction_id}")
+            
             # Filter out already known rumors
             unknown_rumors = [rumor for rumor in rumors if rumor["id"] not in known_rumor_ids]
             
             if not unknown_rumors:
+                logging.info(f"All rumors already known by faction {faction_id}")
                 return []  # All rumors already known
+                
+            logging.info(f"Found {len(unknown_rumors)} unknown rumors")
             
             discovered_rumor_ids = []
             
@@ -1263,35 +1271,48 @@ class MonitoringManager:
             high_beat_rumors = []
             for rumor in unknown_rumors:
                 dc = rumor["discovery_dc"]
-                if roll_result >= (dc + 7):
-                    high_beat_rumors.append(rumor["id"])
+                margin = roll_result - dc
+                if margin >= 7:
+                    logging.info(f"Roll {roll_result} beats rumor DC {dc} by {margin} (≥7), marking as discovered: {rumor['id']}")
+                    high_beat_rumors.append(rumor)
                     
                     # Mark as discovered
                     self.rumor_repository.mark_as_known(rumor["id"], faction_id, turn_number)
                     discovered_rumor_ids.append(rumor["id"])
             
-            # If roll beats any DCs but not by 7+, discover one random rumor
-            if not high_beat_rumors:
-                beatable_rumors = []
-                for rumor in unknown_rumors:
-                    dc = rumor["discovery_dc"]
-                    if roll_result >= dc:
-                        beatable_rumors.append(rumor)
-                
-                if beatable_rumors:
-                    # Select one random rumor weighted by how much the roll exceeds the DC
-                    weights = []
-                    for rumor in beatable_rumors:
-                        dc = rumor["discovery_dc"]
-                        weight = roll_result - dc + 1  # +1 to ensure positive weight
-                        weights.append(weight)
-                    
-                    selected_rumor = random.choices(beatable_rumors, weights=weights, k=1)[0]
-                    
-                    # Mark as discovered
-                    self.rumor_repository.mark_as_known(selected_rumor["id"], faction_id, turn_number)
-                    discovered_rumor_ids.append(selected_rumor["id"])
+            logging.info(f"Discovered {len(high_beat_rumors)} high-beat rumors: {discovered_rumor_ids}")
             
+            # Look for beatable rumors with margin <7 (excluding already discovered high-beat rumors)
+            remaining_ids = [rumor["id"] for rumor in high_beat_rumors]
+            beatable_rumors = []
+            
+            for rumor in unknown_rumors:
+                # Skip rumors already discovered with high beat
+                if rumor["id"] in discovered_rumor_ids:
+                    continue
+                    
+                dc = rumor["discovery_dc"]
+                if roll_result >= dc:
+                    margin = roll_result - dc
+                    logging.info(f"Roll {roll_result} beats rumor DC {dc} by {margin} (<7), adding to beatable rumors")
+                    beatable_rumors.append(rumor)
+            
+            if beatable_rumors:
+                # Select one random rumor weighted by how much the roll exceeds the DC
+                weights = []
+                for rumor in beatable_rumors:
+                    dc = rumor["discovery_dc"]
+                    weight = roll_result - dc + 1  # +1 to ensure positive weight
+                    weights.append(weight)
+                
+                selected_rumor = random.choices(beatable_rumors, weights=weights, k=1)[0]
+                logging.info(f"Selected one random rumor from {len(beatable_rumors)} beatable rumors: {selected_rumor['id']}")
+                
+                # Mark as discovered
+                self.rumor_repository.mark_as_known(selected_rumor["id"], faction_id, turn_number)
+                discovered_rumor_ids.append(selected_rumor["id"])
+            
+            logging.info(f"Total discovered rumors: {len(discovered_rumor_ids)} - IDs: {discovered_rumor_ids}")
             return discovered_rumor_ids
         except Exception as e:
             logging.error(f"Error in _process_rumor_discovery: {str(e)}")
@@ -1622,7 +1643,8 @@ class MonitoringManager:
                 "faction_id": faction_id,
                 "faction_name": faction.name,
                 "turn_number": turn_number,
-                "districts": {}
+                "report_time": datetime.now().isoformat(),
+                "districts": []
             }
             
             # Process each district
@@ -1647,21 +1669,138 @@ class MonitoringManager:
                     if rumor:
                         rumor_details.append({
                             "id": rumor.id,
-                            "text": rumor.rumor_text
+                            "rumor_text": rumor.rumor_text
+                        })
+                
+                # Process faction information
+                factions_detected = []
+                if "perceived_influences" in best_report:
+                    for faction_id, influence in best_report["perceived_influences"].items():
+                        # Get faction name
+                        detected_faction = self.faction_repository.find_by_id(faction_id)
+                        if not detected_faction:
+                            continue
+                            
+                        # Check if phantom
+                        is_phantom = False
+                        if "phantom_detections" in best_report and faction_id in best_report["phantom_detections"]:
+                            is_phantom = True
+                            
+                        factions_detected.append({
+                            "faction_id": faction_id,
+                            "faction_name": detected_faction.name,
+                            "influence": influence,
+                            "is_phantom": is_phantom
                         })
                 
                 # Add district summary
-                summary["districts"][district_id] = {
+                summary["districts"].append({
                     "district_id": district_id,
                     "district_name": district.name,
-                    "perceived_influences": best_report.get("perceived_influences", {}),
-                    "perceived_strongholds": best_report.get("perceived_strongholds", {}),
+                    "factions_detected": factions_detected,
                     "district_modifier": best_report.get("district_modifier"),
                     "confidence_rating": best_report["confidence_rating"],
                     "discovered_rumors": rumor_details
-                }
+                })
             
             return summary
         except Exception as e:
             logging.error(f"Error in generate_weekly_intelligence_summary: {str(e)}")
+            return {"error": str(e)}
+            
+    def generate_weekly_report(self, faction_id, turn_number):
+        """Alias for generate_weekly_intelligence_summary for backward compatibility.
+        
+        Args:
+            faction_id (str): Faction ID.
+            turn_number (int): Turn number.
+            
+        Returns:
+            dict: Intelligence summary.
+        """
+        return self.generate_weekly_intelligence_summary(faction_id, turn_number)
+        
+    def generate_consolidated_report(self, faction_id, turn_number):
+        """Generate a simplified consolidated report showing only key information across all districts.
+        
+        This report focuses only on confidence ratings, district modifiers, and newly discovered rumors
+        for the current turn, without including detailed influence information.
+        
+        Args:
+            faction_id (str): Faction ID.
+            turn_number (int): Turn number.
+            
+        Returns:
+            dict: Consolidated report containing only essential information.
+        """
+        try:
+            # Get all reports for the faction this turn
+            reports = self.get_faction_reports(faction_id, turn_number)
+            
+            # Get detailed data for each report
+            detailed_reports = []
+            for report_summary in reports:
+                report_data = self.get_monitoring_report(report_summary["id"])
+                if report_data:
+                    detailed_reports.append(report_data)
+            
+            # Get faction
+            faction = self.faction_repository.find_by_id(faction_id)
+            if not faction:
+                return {"error": "Faction not found"}
+            
+            # Get all districts
+            districts = self.district_repository.find_all()
+            district_map = {d.id: d for d in districts}
+            
+            # Initialize consolidated report
+            consolidated_report = {
+                "faction_id": faction_id,
+                "faction_name": faction.name,
+                "turn_number": turn_number,
+                "report_time": datetime.now().isoformat(),
+                "districts": []
+            }
+            
+            # Process each report to extract only the information we need
+            for report in detailed_reports:
+                district_id = report["district_id"]
+                district = district_map.get(district_id)
+                
+                if not district:
+                    continue
+                
+                # Get confident rating
+                confidence_rating = report.get("confidence_rating", 0)
+                
+                # Get district modifier
+                district_modifier = report.get("district_modifier")
+                
+                # Get discovered rumors
+                discovered_rumors = []
+                if "discovered_rumors" in report and report["discovered_rumors"]:
+                    for rumor_id in report["discovered_rumors"]:
+                        rumor = self.rumor_repository.find_by_id(rumor_id)
+                        if rumor:
+                            discovered_rumors.append({
+                                "id": rumor.id,
+                                "rumor_text": rumor.rumor_text
+                            })
+                
+                # Add district to consolidated report if it has any relevant information
+                if confidence_rating > 0 or district_modifier or discovered_rumors:
+                    consolidated_report["districts"].append({
+                        "district_id": district_id,
+                        "district_name": district.name,
+                        "confidence_rating": confidence_rating,
+                        "district_modifier": district_modifier,
+                        "discovered_rumors": discovered_rumors
+                    })
+            
+            # Sort districts by confidence rating (highest first)
+            consolidated_report["districts"].sort(key=lambda d: d.get("confidence_rating", 0), reverse=True)
+            
+            return consolidated_report
+        except Exception as e:
+            logging.error(f"Error in generate_consolidated_report: {str(e)}")
             return {"error": str(e)}

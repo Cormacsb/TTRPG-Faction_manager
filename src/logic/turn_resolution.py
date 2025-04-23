@@ -99,6 +99,11 @@ class TurnResolutionManager:
             logging.info("Phase 4: Conflict Detection Phase")
             conflicts = self.action_manager.detect_conflicts(turn_number)
             
+             # Phase 4.5: Enemy Penalty Phase
+            self.turn_manager.set_current_phase("enemy_penalty")
+            logging.info("Enemy Penalty Calculation Phase")
+            penalty_results = self.action_manager.calculate_enemy_penalties(turn_number)
+
             # Phase 5: Action Roll Phase
             self.turn_manager.set_current_phase("action_roll")
             logging.info("Phase 5: Action Roll Phase")
@@ -172,6 +177,9 @@ class TurnResolutionManager:
             monitoring_results = self.monitoring_manager.process_monitoring(turn_number)
             
             # Phase 9: Faction Passive Monitoring Phase
+            # Note: This is deliberately a separate phase from the general monitoring phase above.
+            # The passive monitoring phase handles factions with 4+ influence in a district automatically
+            # monitoring without requiring an agent or squadron to be assigned.
             self.turn_manager.set_current_phase("faction_passive_monitoring")
             logging.info("Phase 9: Faction Passive Monitoring Phase")
             passive_monitoring_results = self.monitoring_manager.process_passive_monitoring(turn_number)
@@ -192,17 +200,11 @@ class TurnResolutionManager:
             self.turn_manager.set_current_phase("turn_completion")
             logging.info("Phase 12: Turn Completion Phase")
             
+            # Process turn completion (including metrics export)
+            completion_results = self._process_turn_completion(turn_number)
+            
             # Log completion of turn
             logging.info(f"Completed turn {turn_number} processing")
-            self.turn_manager.log_turn_history(
-                turn_number,
-                "turn_completion",
-                f"Turn {turn_number} completed",
-                "All phases processed successfully"
-            )
-            
-            # Advance to next turn
-            self.turn_manager.advance_turn()
             
             return {
                 "turn_number": turn_number,
@@ -211,8 +213,9 @@ class TurnResolutionManager:
                 "monitoring_results": monitoring_results,
                 "passive_monitoring_results": passive_monitoring_results,
                 "rumor_update_results": rumor_update_results,
-                "status": "turn_complete",
-                "map_results": map_results
+                "map_results": map_results,
+                "completion_results": completion_results,
+                "status": "complete"
             }
         except Exception as e:
             logging.error(f"Error in process_turn_part2: {str(e)}")
@@ -1026,4 +1029,124 @@ class TurnResolutionManager:
             return faction_maps
         except Exception as e:
             logging.error(f"Error generating faction maps: {str(e)}")
-            return {"errors": [str(e)]}    
+            return {"errors": [str(e)]}
+    
+    def _process_turn_completion(self, turn_number):
+        """Handle turn completion tasks.
+        
+        Args:
+            turn_number (int): Current turn number.
+            
+        Returns:
+            dict: Results of completion processing.
+        """
+        try:
+            # Log turn completion
+            self.turn_manager.log_turn_history(
+                turn_number,
+                "turn_completion",
+                f"Turn {turn_number} completed",
+                "Processing complete"
+            )
+            
+            # Export faction metrics to CSV
+            metrics_results = self._export_faction_metrics(turn_number)
+            
+            # Advance to next turn
+            next_turn = turn_number + 1
+            self.turn_manager.set_current_turn(next_turn)
+            
+            return {
+                "next_turn": next_turn,
+                "metrics_exported": metrics_results.get("success", False)
+            }
+        except Exception as e:
+            logging.error(f"Error in turn completion: {str(e)}")
+            return {"error": str(e)}
+    
+    def _export_faction_metrics(self, turn_number):
+        """Export faction metrics to CSV at the end of turn processing.
+        
+        Args:
+            turn_number (int): Current turn number.
+            
+        Returns:
+            dict: Results of export operation.
+        """
+        try:
+            import csv
+            import os
+            from datetime import datetime
+            
+            # Create metrics directory if needed
+            metrics_dir = os.path.join("data", "metrics")
+            os.makedirs(metrics_dir, exist_ok=True)
+            
+            # Create turn directory
+            turn_dir = os.path.join(metrics_dir, f"turn_{turn_number}")
+            os.makedirs(turn_dir, exist_ok=True)
+            
+            # Get all factions
+            all_factions = self.faction_repository.find_all()
+            
+            # Get all districts
+            all_districts = self.district_repository.find_all()
+            
+            # Calculate metrics for all factions
+            metrics_data = []
+            
+            for faction in all_factions:
+                commerce_total = 0
+                aristocratic_total = 0
+                muster_total = 0
+                grand_total = 0
+                
+                for district in all_districts:
+                    influence = district.get_faction_influence(faction.id)
+                    
+                    if influence > 0:
+                        commerce = influence * district.commerce_value
+                        aristocratic = influence * district.aristocratic_value
+                        muster = influence * district.muster_value
+                        total = commerce + aristocratic + muster
+                        
+                        commerce_total += commerce
+                        aristocratic_total += aristocratic
+                        muster_total += muster
+                        grand_total += total
+                
+                metrics_data.append({
+                    "faction_id": faction.id,
+                    "faction_name": faction.name,
+                    "commerce_total": commerce_total,
+                    "aristocratic_total": aristocratic_total,
+                    "muster_total": muster_total,
+                    "grand_total": grand_total,
+                    "turn_number": turn_number,
+                    "timestamp": datetime.now().isoformat()
+                })
+            
+            # File path for all factions metrics
+            file_path = os.path.join(turn_dir, f"faction_metrics_turn_{turn_number}.csv")
+            
+            # Write to CSV
+            with open(file_path, 'w', newline='') as csvfile:
+                fieldnames = ["faction_name", "commerce_total", "aristocratic_total", 
+                              "muster_total", "grand_total", "turn_number", "timestamp"]
+                
+                writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+                writer.writeheader()
+                
+                for data in metrics_data:
+                    writer.writerow({k: data[k] for k in fieldnames})
+            
+            logging.info(f"Faction metrics exported to {file_path}")
+            
+            return {
+                "success": True,
+                "file_path": file_path,
+                "factions_processed": len(metrics_data)
+            }
+        except Exception as e:
+            logging.error(f"Error exporting faction metrics: {str(e)}")
+            return {"success": False, "error": str(e)}    

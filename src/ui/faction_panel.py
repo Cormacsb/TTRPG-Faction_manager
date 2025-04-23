@@ -6,17 +6,19 @@ import logging
 class FactionPanel:
     """Panel for managing factions."""
     
-    def __init__(self, parent, db_manager, faction_repository):
+    def __init__(self, parent, db_manager, faction_repository, district_repository):
         """Initialize the faction panel.
         
         Args:
             parent: Parent widget.
             db_manager: Database manager instance.
             faction_repository: Repository for faction operations.
+            district_repository: Repository for district operations.
         """
         self.parent = parent
         self.db_manager = db_manager
         self.faction_repository = faction_repository
+        self.district_repository = district_repository
         
         # Create main frame
         self.frame = ttk.Frame(parent)
@@ -240,49 +242,63 @@ class FactionPanel:
         self.edit_relationship_button.pack(side=tk.LEFT, padx=5, pady=5)
     
     def create_resources_table(self):
-        """Create the resources table."""
+        """Create the influence metrics table."""
         # Resources treeview
         self.resources_tree = ttk.Treeview(
             self.resources_frame, 
-            columns=("resource_type", "resource_value"),
+            columns=("district_name", "commerce", "aristocratic", "muster", "total"),
             show="headings"
         )
         self.resources_tree.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
         
         # Configure columns
-        self.resources_tree.heading("resource_type", text="Resource")
-        self.resources_tree.heading("resource_value", text="Value")
+        self.resources_tree.heading("district_name", text="District")
+        self.resources_tree.heading("commerce", text="Commerce")
+        self.resources_tree.heading("aristocratic", text="Aristocratic")
+        self.resources_tree.heading("muster", text="Muster")
+        self.resources_tree.heading("total", text="Total")
         
-        self.resources_tree.column("resource_type", width=150)
-        self.resources_tree.column("resource_value", width=100, anchor=tk.CENTER)
+        self.resources_tree.column("district_name", width=150)
+        self.resources_tree.column("commerce", width=80, anchor=tk.CENTER)
+        self.resources_tree.column("aristocratic", width=80, anchor=tk.CENTER)
+        self.resources_tree.column("muster", width=80, anchor=tk.CENTER)
+        self.resources_tree.column("total", width=80, anchor=tk.CENTER)
+        
+        # Add a totals row at the bottom with a separate display
+        self.metrics_totals_frame = ttk.Frame(self.resources_frame)
+        self.metrics_totals_frame.pack(fill=tk.X, padx=5, pady=5)
+        
+        # Create labels for totals
+        ttk.Label(self.metrics_totals_frame, text="TOTALS:", font=("Arial", 9, "bold")).grid(row=0, column=0, padx=5, pady=2, sticky=tk.W)
+        
+        self.commerce_total_var = tk.StringVar(value="0")
+        self.aristocratic_total_var = tk.StringVar(value="0")
+        self.muster_total_var = tk.StringVar(value="0")
+        self.grand_total_var = tk.StringVar(value="0")
+        
+        ttk.Label(self.metrics_totals_frame, text="Commerce Total:").grid(row=1, column=0, padx=5, pady=2, sticky=tk.W)
+        ttk.Label(self.metrics_totals_frame, textvariable=self.commerce_total_var, font=("Arial", 9, "bold")).grid(row=1, column=1, padx=5, pady=2, sticky=tk.W)
+        
+        ttk.Label(self.metrics_totals_frame, text="Aristocratic Total:").grid(row=2, column=0, padx=5, pady=2, sticky=tk.W)
+        ttk.Label(self.metrics_totals_frame, textvariable=self.aristocratic_total_var, font=("Arial", 9, "bold")).grid(row=2, column=1, padx=5, pady=2, sticky=tk.W)
+        
+        ttk.Label(self.metrics_totals_frame, text="Muster Total:").grid(row=3, column=0, padx=5, pady=2, sticky=tk.W)
+        ttk.Label(self.metrics_totals_frame, textvariable=self.muster_total_var, font=("Arial", 9, "bold")).grid(row=3, column=1, padx=5, pady=2, sticky=tk.W)
+        
+        ttk.Label(self.metrics_totals_frame, text="GRAND TOTAL:").grid(row=4, column=0, padx=5, pady=2, sticky=tk.W)
+        ttk.Label(self.metrics_totals_frame, textvariable=self.grand_total_var, font=("Arial", 9, "bold")).grid(row=4, column=1, padx=5, pady=2, sticky=tk.W)
         
         # Button frame
         self.resources_button_frame = ttk.Frame(self.resources_frame)
         self.resources_button_frame.pack(fill=tk.X, padx=5, pady=5)
         
-        # Add resource button
-        self.add_resource_button = ttk.Button(
+        # Export CSV button
+        self.export_csv_button = ttk.Button(
             self.resources_button_frame, 
-            text="Add Resource", 
-            command=self.add_resource
+            text="Export to CSV", 
+            command=self.export_metrics_to_csv
         )
-        self.add_resource_button.pack(side=tk.LEFT, padx=5, pady=5)
-        
-        # Edit resource button
-        self.edit_resource_button = ttk.Button(
-            self.resources_button_frame, 
-            text="Edit Resource", 
-            command=self.edit_resource
-        )
-        self.edit_resource_button.pack(side=tk.LEFT, padx=5, pady=5)
-        
-        # Remove resource button
-        self.remove_resource_button = ttk.Button(
-            self.resources_button_frame, 
-            text="Remove Resource", 
-            command=self.remove_resource
-        )
-        self.remove_resource_button.pack(side=tk.LEFT, padx=5, pady=5)
+        self.export_csv_button.pack(side=tk.LEFT, padx=5, pady=5)
     
     def load_factions(self):
         """Load factions into the list."""
@@ -389,7 +405,7 @@ class FactionPanel:
             raise
     
     def load_resources_data(self, faction):
-        """Load resources data for a faction.
+        """Load influence metrics data for a faction.
         
         Args:
             faction: Faction instance.
@@ -399,19 +415,48 @@ class FactionPanel:
             for item in self.resources_tree.get_children():
                 self.resources_tree.delete(item)
             
-            # No resources data
-            if not faction.resources:
-                return
+            # Get all districts
+            districts = self.district_repository.find_all()
             
-            # Add resource entries
-            for resource_type, value in faction.resources.items():
-                self.resources_tree.insert(
-                    "", 
-                    tk.END, 
-                    values=(resource_type, value)
-                )
+            # Calculate metrics
+            commerce_total = 0
+            aristocratic_total = 0
+            muster_total = 0
+            grand_total = 0
+            
+            # Add entries for each district
+            for district in districts:
+                # Get faction influence in this district
+                influence = district.get_faction_influence(faction.id)
+                
+                if influence > 0:
+                    # Calculate weighted values
+                    commerce = influence * district.commerce_value
+                    aristocratic = influence * district.aristocratic_value
+                    muster = influence * district.muster_value
+                    total = commerce + aristocratic + muster
+                    
+                    # Add to totals
+                    commerce_total += commerce
+                    aristocratic_total += aristocratic
+                    muster_total += muster
+                    grand_total += total
+                    
+                    # Add to tree
+                    self.resources_tree.insert(
+                        "", 
+                        tk.END, 
+                        values=(district.name, commerce, aristocratic, muster, total)
+                    )
+            
+            # Update totals display
+            self.commerce_total_var.set(str(commerce_total))
+            self.aristocratic_total_var.set(str(aristocratic_total))
+            self.muster_total_var.set(str(muster_total))
+            self.grand_total_var.set(str(grand_total))
+            
         except Exception as e:
-            logging.error(f"Error loading resources data: {str(e)}")
+            logging.error(f"Error loading influence metrics data: {str(e)}")
             raise
     
     def update_color_display(self, color):
@@ -967,272 +1012,103 @@ class FactionPanel:
             logging.error(f"Error updating relationship: {str(e)}")
             messagebox.showerror("Error", f"Failed to update relationship: {str(e)}")
     
-    def add_resource(self):
-        """Handle add resource button click."""
-        # Get faction ID
-        faction_id = self.id_var.get()
-        
-        if not faction_id:
-            messagebox.showinfo("Info", "No faction selected")
-            return
-            
-        # Create a dialog for adding resource
-        dialog = tk.Toplevel(self.frame)
-        dialog.title("Add Resource")
-        dialog.geometry("300x150")
-        dialog.transient(self.frame)
-        dialog.grab_set()
-        
-        # Center the dialog
-        dialog.geometry("+%d+%d" % (
-            self.frame.winfo_rootx() + (self.frame.winfo_width() / 2) - 150,
-            self.frame.winfo_rooty() + (self.frame.winfo_height() / 2) - 75
-        ))
-        
-        # Resource type field
-        ttk.Label(dialog, text="Resource Type:").grid(
-            row=0, column=0, sticky=tk.W, padx=10, pady=10
-        )
-        
-        resource_type_var = tk.StringVar()
-        resource_type_entry = ttk.Entry(dialog, textvariable=resource_type_var, width=20)
-        resource_type_entry.grid(row=0, column=1, padx=10, pady=10)
-        resource_type_entry.focus_set()
-        
-        # Resource value field
-        ttk.Label(dialog, text="Value:").grid(
-            row=1, column=0, sticky=tk.W, padx=10, pady=10
-        )
-        
-        resource_value_var = tk.IntVar(value=0)
-        resource_value_spinner = ttk.Spinbox(
-            dialog, 
-            from_=0, 
-            to=9999, 
-            textvariable=resource_value_var, 
-            width=5
-        )
-        resource_value_spinner.grid(row=1, column=1, sticky=tk.W, padx=10, pady=10)
-        
-        # Button frame
-        button_frame = ttk.Frame(dialog)
-        button_frame.grid(row=2, column=0, columnspan=2, pady=10)
-        
-        # Add button
-        add_button = ttk.Button(
-            button_frame, 
-            text="Add", 
-            command=lambda: self.add_faction_resource(
-                faction_id, 
-                resource_type_var.get(), 
-                resource_value_var.get(),
-                dialog
-            )
-        )
-        add_button.pack(side=tk.LEFT, padx=5)
-        
-        # Cancel button
-        cancel_button = ttk.Button(
-            button_frame, 
-            text="Cancel", 
-            command=dialog.destroy
-        )
-        cancel_button.pack(side=tk.LEFT, padx=5)
-    
-    def add_faction_resource(self, faction_id, resource_type, value, dialog):
-        """Add resource to a faction.
-        
-        Args:
-            faction_id (str): Faction ID.
-            resource_type (str): Resource type.
-            value (int): Resource value.
-            dialog: Dialog window to close.
-        """
-        if not resource_type:
-            messagebox.showerror("Error", "Resource type is required")
-            return
-            
+    def export_metrics_to_csv(self):
+        """Export faction metrics to CSV file."""
         try:
-            # Get faction
-            faction = self.faction_repository.find_by_id(faction_id)
+            # Get faction ID
+            faction_id = self.id_var.get()
             
-            if not faction:
-                messagebox.showerror("Error", f"Faction not found: {faction_id}")
-                dialog.destroy()
+            if not faction_id:
+                messagebox.showinfo("Info", "No faction selected")
                 return
-            
-            # Check if resource already exists
-            if resource_type in faction.resources:
-                messagebox.showerror("Error", f"Resource '{resource_type}' already exists")
-                return
-            
-            # Add resource
-            faction.set_resource(resource_type, value)
-            
-            # Save faction
-            if self.faction_repository.update(faction):
-                # Close dialog
-                dialog.destroy()
                 
-                # Reload resources data
-                self.load_resources_data(faction)
-            else:
-                messagebox.showerror("Error", "Failed to add resource")
-        except Exception as e:
-            logging.error(f"Error adding resource: {str(e)}")
-            messagebox.showerror("Error", f"Failed to add resource: {str(e)}")
-    
-    def edit_resource(self):
-        """Handle edit resource button click."""
-        # Get faction ID
-        faction_id = self.id_var.get()
-        
-        if not faction_id:
-            messagebox.showinfo("Info", "No faction selected")
-            return
+            # Get faction
+            faction = self.faction_repository.find_by_id(faction_id)
             
-        # Get selected resource
-        selection = self.resources_tree.selection()
-        
-        if not selection:
-            messagebox.showinfo("Info", "Please select a resource to edit")
-            return
+            if not faction:
+                messagebox.showerror("Error", f"Faction not found: {faction_id}")
+                return
             
-        # Get resource data
-        resource_type = self.resources_tree.item(selection[0], "values")[0]
-        current_value = int(self.resources_tree.item(selection[0], "values")[1])
-        
-        # Create a dialog for editing resource
-        dialog = tk.Toplevel(self.frame)
-        dialog.title(f"Edit Resource: {resource_type}")
-        dialog.geometry("300x120")
-        dialog.transient(self.frame)
-        dialog.grab_set()
-        
-        # Center the dialog
-        dialog.geometry("+%d+%d" % (
-            self.frame.winfo_rootx() + (self.frame.winfo_width() / 2) - 150,
-            self.frame.winfo_rooty() + (self.frame.winfo_height() / 2) - 60
-        ))
-        
-        # Resource value field
-        ttk.Label(dialog, text="Value:").grid(
-            row=0, column=0, sticky=tk.W, padx=10, pady=10
-        )
-        
-        resource_value_var = tk.IntVar(value=current_value)
-        resource_value_spinner = ttk.Spinbox(
-            dialog, 
-            from_=0, 
-            to=9999, 
-            textvariable=resource_value_var, 
-            width=5
-        )
-        resource_value_spinner.grid(row=0, column=1, sticky=tk.W, padx=10, pady=10)
-        
-        # Button frame
-        button_frame = ttk.Frame(dialog)
-        button_frame.grid(row=1, column=0, columnspan=2, pady=10)
-        
-        # Update button
-        update_button = ttk.Button(
-            button_frame, 
-            text="Update", 
-            command=lambda: self.update_faction_resource(
-                faction_id, 
-                resource_type, 
-                resource_value_var.get(),
-                dialog
+            # Create file dialog
+            from tkinter import filedialog
+            import csv
+            import os
+            from datetime import datetime
+            
+            # Get current turn
+            try:
+                query = "SELECT value FROM game_state WHERE key = 'current_turn'"
+                result = self.db_manager.execute_query(query)
+                current_turn = int(result[0]["value"]) if result else 1
+            except:
+                current_turn = 1
+            
+            # Default filename
+            default_filename = f"{faction.name.replace(' ', '_')}_metrics_turn_{current_turn}.csv"
+            
+            # Ask for file location
+            file_path = filedialog.asksaveasfilename(
+                defaultextension=".csv",
+                filetypes=[("CSV files", "*.csv"), ("All files", "*.*")],
+                initialfile=default_filename
             )
-        )
-        update_button.pack(side=tk.LEFT, padx=5)
-        
-        # Cancel button
-        cancel_button = ttk.Button(
-            button_frame, 
-            text="Cancel", 
-            command=dialog.destroy
-        )
-        cancel_button.pack(side=tk.LEFT, padx=5)
-    
-    def update_faction_resource(self, faction_id, resource_type, value, dialog):
-        """Update faction resource.
-        
-        Args:
-            faction_id (str): Faction ID.
-            resource_type (str): Resource type.
-            value (int): Resource value.
-            dialog: Dialog window to close.
-        """
-        try:
-            # Get faction
-            faction = self.faction_repository.find_by_id(faction_id)
             
-            if not faction:
-                messagebox.showerror("Error", f"Faction not found: {faction_id}")
-                dialog.destroy()
-                return
+            if not file_path:
+                return  # User canceled
             
-            # Update resource
-            faction.set_resource(resource_type, value)
+            # Get all factions
+            all_factions = self.faction_repository.find_all()
             
-            # Save faction
-            if self.faction_repository.update(faction):
-                # Close dialog
-                dialog.destroy()
+            # Get all districts
+            all_districts = self.district_repository.find_all()
+            
+            # Calculate metrics for all factions
+            metrics_data = []
+            
+            for f in all_factions:
+                commerce_total = 0
+                aristocratic_total = 0
+                muster_total = 0
+                grand_total = 0
                 
-                # Reload resources data
-                self.load_resources_data(faction)
-            else:
-                messagebox.showerror("Error", "Failed to update resource")
+                for district in all_districts:
+                    influence = district.get_faction_influence(f.id)
+                    
+                    if influence > 0:
+                        commerce = influence * district.commerce_value
+                        aristocratic = influence * district.aristocratic_value
+                        muster = influence * district.muster_value
+                        total = commerce + aristocratic + muster
+                        
+                        commerce_total += commerce
+                        aristocratic_total += aristocratic
+                        muster_total += muster
+                        grand_total += total
+                
+                metrics_data.append({
+                    "faction_id": f.id,
+                    "faction_name": f.name,
+                    "commerce_total": commerce_total,
+                    "aristocratic_total": aristocratic_total,
+                    "muster_total": muster_total,
+                    "grand_total": grand_total,
+                    "turn_number": current_turn,
+                    "timestamp": datetime.now().isoformat()
+                })
+            
+            # Write to CSV
+            with open(file_path, 'w', newline='') as csvfile:
+                fieldnames = ["faction_name", "commerce_total", "aristocratic_total", 
+                              "muster_total", "grand_total", "turn_number", "timestamp"]
+                
+                writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+                writer.writeheader()
+                
+                for data in metrics_data:
+                    writer.writerow({k: data[k] for k in fieldnames})
+            
+            messagebox.showinfo("Success", f"Metrics exported to {file_path}")
+            
         except Exception as e:
-            logging.error(f"Error updating resource: {str(e)}")
-            messagebox.showerror("Error", f"Failed to update resource: {str(e)}")
-    
-    def remove_resource(self):
-        """Handle remove resource button click."""
-        # Get faction ID
-        faction_id = self.id_var.get()
-        
-        if not faction_id:
-            messagebox.showinfo("Info", "No faction selected")
-            return
-            
-        # Get selected resource
-        selection = self.resources_tree.selection()
-        
-        if not selection:
-            messagebox.showinfo("Info", "Please select a resource to remove")
-            return
-            
-        # Get resource data
-        resource_type = self.resources_tree.item(selection[0], "values")[0]
-        
-        # Confirm removal
-        if not messagebox.askyesno(
-            "Confirm Remove", 
-            f"Are you sure you want to remove resource '{resource_type}'?"
-        ):
-            return
-            
-        try:
-            # Get faction
-            faction = self.faction_repository.find_by_id(faction_id)
-            
-            if not faction:
-                messagebox.showerror("Error", f"Faction not found: {faction_id}")
-                return
-            
-            # Remove resource
-            if resource_type in faction.resources:
-                faction.resources.pop(resource_type)
-            
-            # Save faction
-            if self.faction_repository.update(faction):
-                # Reload resources data
-                self.load_resources_data(faction)
-            else:
-                messagebox.showerror("Error", "Failed to remove resource")
-        except Exception as e:
-            logging.error(f"Error removing resource: {str(e)}")
-            messagebox.showerror("Error", f"Failed to remove resource: {str(e)}")
+            logging.error(f"Error exporting metrics to CSV: {str(e)}")
+            messagebox.showerror("Error", f"Failed to export metrics: {str(e)}")

@@ -135,7 +135,8 @@ class MainWindow:
         
         # Faction management panel
         self.faction_panel = FactionPanel(
-            self.notebook, self.db_manager, self.faction_repository
+            self.notebook, self.db_manager, self.faction_repository,
+            self.district_repository
         )
         self.notebook.add(self.faction_panel.frame, text="Factions")
 
@@ -178,7 +179,7 @@ class MainWindow:
         # Reports panel
         self.report_panel = ReportsPanel(
             self.notebook, self.db_manager, self.district_repository,
-            self.faction_repository, self.rumor_repository, None  # Monitoring manager not available
+            self.faction_repository, self.rumor_repository, self.turn_resolution_manager.monitoring_manager
         )
         self.notebook.add(self.report_panel, text="Reports")
     

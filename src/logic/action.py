@@ -1277,346 +1277,639 @@ class ActionManager:
         except Exception as e:
             logging.error(f"Error in _faction_has_available_pieces_in_district: {str(e)}")
             return False
-    
-    def _calculate_enemy_piece_penalties(self, piece_id, piece_type, faction_id, district_id, turn_number):
-        """Calculate penalties from enemy pieces based on relationships and proximity.
+
+    def calculate_enemy_penalties(self, turn_number):
+        """Calculate enemy penalties for all pieces in the turn.
+        
+        This is run as a separate phase after conflict detection but before action rolls.
         
         Args:
-            piece_id (str): ID of the piece to calculate penalties for.
-            piece_type (str): Type of the piece ('agent' or 'squadron').
-            faction_id (str): Faction ID of the piece.
-            district_id (str): District ID where the piece is located.
             turn_number (int): Current turn number.
             
         Returns:
-            tuple: Total penalty value and breakdown of penalties.
+            dict: Summary of penalties applied.
         """
-        total_penalty = 0
-        penalty_breakdown = []
+        logging.info(f"Starting enemy penalty calculation phase for turn {turn_number}")
         
-        try:
-            # Get district
-            district = self.district_repository.find_by_id(district_id)
-            if not district:
-                logging.error(f"District {district_id} not found for penalty calculation")
-                return total_penalty, penalty_breakdown
+        # Initialize penalty tracker
+        self.reset_penalty_tracker()
+        
+        # Get all actions for this turn
+        query = """
+            SELECT a.id, a.piece_id, a.piece_type, a.faction_id, a.district_id, a.in_conflict
+            FROM actions a
+            WHERE a.turn_number = :turn_number
+        """
+        
+        pieces = self.db_manager.execute_query(query, {"turn_number": turn_number})
+        
+        # Track the pieces that will apply penalties (not in conflicts)
+        pending_penalties = []
+        
+        # Track pieces that can receive penalties (all pieces including those in conflicts)
+        all_action_pieces = {}
+        
+        # First, identify all pieces that could potentially apply penalties (not in conflicts)
+        # and all pieces that can receive penalties (including those in conflicts)
+        for row in pieces:
+            piece = dict(row)
             
-            # Get faction
-            faction = self.faction_repository.find_by_id(faction_id)
+            # Add to the list of all action pieces (can receive penalties)
+            action_key = f"{piece['district_id']}_{piece['faction_id']}_{piece['piece_id']}"
+            all_action_pieces[action_key] = piece
+            
+            # Skip pieces in conflicts when applying penalties
+            if piece["in_conflict"]:
+                logging.info(f"Skipping piece {piece['piece_id']} ({piece['piece_type']}) " + 
+                            f"for penalty application because it's in a conflict")
+                continue
+            
+            # Get faction to check for negative relationships
+            faction = self.faction_repository.find_by_id(piece["faction_id"])
             if not faction:
-                logging.error(f"Faction {faction_id} not found for penalty calculation")
-                return total_penalty, penalty_breakdown
-            
-            # Check if the piece is in a conflict (for logging purposes only, we still calculate penalties)
-            is_in_conflict = self._is_piece_in_conflict(turn_number, piece_id, piece_type)
-            if is_in_conflict:
-                logging.info(f"Piece {piece_id} is in a conflict - will still receive enemy penalties")
-            
-            # ENHANCED DEBUGGING: Log faction name and district details
-            logging.info(f"Calculating enemy penalties for piece {piece_id} of faction {faction.name} (ID: {faction_id}) in district {district.name} (ID: {district_id})")
-            logging.info(f"District adjacent districts: {district.adjacent_districts}")
-            
-            # Get all factions with negative relationships
+                continue
+                
+            # Check if this faction has any negative relationships
             negative_relationships = {}
-            all_faction_ids = self.faction_repository.get_all_faction_ids()
-            logging.info(f"Found {len(all_faction_ids)} total factions to check relationships with")
+            all_faction_ids = self.get_all_faction_ids()
             
             for other_id in all_faction_ids:
-                if other_id != faction_id:
-                    other_faction = self.faction_repository.find_by_id(other_id)
+                if other_id != faction.id:
                     relationship = faction.get_relationship(other_id)
-                    relationship_inverse = other_faction.get_relationship(faction_id) if other_faction else None
-                    logging.info(f"Relationship with {other_faction.name} (ID: {other_id}): {faction.name} → {other_faction.name} = {relationship}, {other_faction.name} → {faction.name} = {relationship_inverse}")
-                    if relationship < 0:
+                    if relationship < 0:  # Only negative relationships apply penalties
                         negative_relationships[other_id] = relationship
             
-            logging.info(f"Found {len(negative_relationships)} factions with negative relationships: {negative_relationships}")
-            
-            if not negative_relationships:
-                logging.info(f"No negative faction relationships found, skipping enemy penalty calculation")
-                return total_penalty, penalty_breakdown
-            
-            # Process agent penalties (agents target a single enemy piece in same district)
-            # IMPORTANT: Capture the returned value from this method
-            agent_penalty = self._calculate_enemy_agent_penalties(
-                district_id, 
-                faction_id, 
-                piece_id, 
-                piece_type, 
-                negative_relationships, 
+            if negative_relationships:
+                # This piece has potential to apply penalties
+                pending_penalties.append({
+                    "piece_id": piece["piece_id"],
+                    "piece_type": piece["piece_type"],
+                    "faction_id": piece["faction_id"],
+                    "district_id": piece["district_id"],
+                    "negative_relationships": negative_relationships
+                })
+        
+        # We'll use a two-pass approach to get more even distribution:
+        # 1. First randomly process agent penalties (since they can only apply one)
+        # 2. Then randomly process squadron penalties
+        
+        # Track applied penalties {action_id: {source_key: penalty}}
+        applied_penalties = {}
+        
+        # First pass: Apply agent penalties in random order
+        agent_penalties = [p for p in pending_penalties if p["piece_type"] == "agent"]
+        random.shuffle(agent_penalties)  # Randomize order to prevent bias
+        
+        for penalty_piece in agent_penalties:
+            self._apply_agent_penalties(
                 turn_number, 
-                total_penalty, 
-                penalty_breakdown
+                penalty_piece["piece_id"],
+                penalty_piece["faction_id"],
+                penalty_piece["district_id"],
+                penalty_piece["negative_relationships"], 
+                applied_penalties
+            )
+        
+        # Second pass: Apply squadron penalties in random order
+        squadron_penalties = [p for p in pending_penalties if p["piece_type"] == "squadron"]
+        random.shuffle(squadron_penalties)  # Randomize order to prevent bias
+        
+        for penalty_piece in squadron_penalties:
+            # Get the squadron object
+            squadron = self.squadron_repository.find_by_id(penalty_piece["piece_id"])
+            if not squadron:
+                continue
+                
+            # Apply penalties to same district
+            self._apply_squadron_penalties(
+                turn_number,
+                squadron,
+                penalty_piece["faction_id"], 
+                penalty_piece["district_id"],
+                False,  # Not adjacent
+                penalty_piece["negative_relationships"], 
+                applied_penalties
             )
             
-            # Update the total penalty with the value returned from agent penalties
-            total_penalty = agent_penalty
-            logging.info(f"After agent penalties: total_penalty = {total_penalty}")
-            
-            # Process squadron penalties (squadrons affect pieces based on mobility)
-            # IMPORTANT: Capture the returned value from this method
-            squadron_penalty = self._calculate_enemy_squadron_penalties(
-                district, 
-                faction_id, 
-                piece_id, 
-                piece_type, 
-                negative_relationships, 
-                turn_number, 
-                total_penalty, 
-                penalty_breakdown
-            )
-            
-            # Update the total penalty with the value returned from squadron penalties
-            total_penalty = squadron_penalty
-            logging.info(f"After squadron penalties: total_penalty = {total_penalty}")
-            
-            # Final log of penalty calculation results
-            logging.info(f"FINAL enemy penalty calculation for {piece_id}: total={total_penalty}, breakdown={penalty_breakdown}")
-            logging.info(f"DEBUG: Reference check - penalty_breakdown object ID: {id(penalty_breakdown)}")
-            logging.info(f"DEBUG: Final penalty values right before return: total_penalty={total_penalty}, has_penalties={len(penalty_breakdown) > 0}")
-            
-            return total_penalty, penalty_breakdown
-        except Exception as e:
-            logging.error(f"Error calculating enemy piece penalties: {str(e)}")
-            logging.exception("Full traceback for enemy penalty calculation error:")
-            return total_penalty, penalty_breakdown
+            # Apply penalties to adjacent districts (if mobility allows)
+            if squadron.mobility >= 2:
+                # Get the district to find adjacencies
+                district = self.district_repository.find_by_id(penalty_piece["district_id"])
+                if district:
+                    # Randomize adjacent districts to prevent bias
+                    adjacent_districts = district.adjacent_districts.copy()
+                    random.shuffle(adjacent_districts)
+                    
+                    for adjacent_id in adjacent_districts:
+                        self._apply_squadron_penalties(
+                            turn_number,
+                            squadron,
+                            penalty_piece["faction_id"], 
+                            adjacent_id,
+                            True,  # Is adjacent
+                            penalty_piece["negative_relationships"], 
+                            applied_penalties
+                        )
+        
+        # Save penalties to database
+        self._save_applied_penalties(turn_number, applied_penalties)
+        
+        # Calculate totals for summary
+        total_penalty_points = 0
+        for action_penalties in applied_penalties.values():
+            total_penalty_points += sum(action_penalties.values())
+        
+        # Return summary
+        return {
+            "total_pieces_processed": len(pending_penalties),
+            "total_actions_affected": len(applied_penalties),
+            "total_penalty_points": total_penalty_points
+        }
 
-    def _calculate_enemy_agent_penalties(self, district_id, faction_id, piece_id, piece_type, 
-                                    negative_relationships, turn_number, total_penalty, penalty_breakdown):
-        """Calculate penalties from enemy agents in the same district.
+    def _apply_piece_penalties(self, turn_number, penalty_piece, applied_penalties):
+        """Apply penalties from a specific piece to valid targets.
         
         Args:
-            district_id (str): District ID where the piece is located.
-            faction_id (str): Faction ID of the piece.
-            piece_id (str): ID of the piece to calculate penalties for.
-            piece_type (str): Type of the piece ('agent' or 'squadron').
-            negative_relationships (dict): Dictionary of faction_id -> relationship value.
             turn_number (int): Current turn number.
-            total_penalty (int): Running total of penalties (modified in place).
-            penalty_breakdown (list): List of penalty details (modified in place).
-            
-        Returns:
-            int: The updated total penalty amount (for verification only)
+            penalty_piece (dict): The piece applying penalties.
+            applied_penalties (dict): Dictionary to track applied penalties.
         """
-        try:
-            # Ensure penalty tracker is initialized
-            if self.penalty_tracker is None:
-                logging.warning("Penalty tracker was not initialized. Initializing now.")
-                self.reset_penalty_tracker()
+        piece_id = penalty_piece["piece_id"]
+        piece_type = penalty_piece["piece_type"]
+        faction_id = penalty_piece["faction_id"]
+        district_id = penalty_piece["district_id"] 
+        negative_relationships = penalty_piece["negative_relationships"]
+        
+        # Get district
+        district = self.district_repository.find_by_id(district_id)
+        if not district:
+            return
+        
+        # Different handling for agents vs squadrons
+        if piece_type == "agent":
+            # Check if agent already applied penalty
+            if self.penalty_tracker.has_agent_applied_penalty(piece_id):
+                return
                 
-            # Record initial penalty value for verification
-            initial_penalty = total_penalty
-            logging.info(f"Initial agent penalty value: {initial_penalty}")
+            # Agents only apply penalties to pieces in same district
+            self._apply_agent_penalties(
+                turn_number, 
+                piece_id, 
+                faction_id, 
+                district_id, 
+                negative_relationships, 
+                applied_penalties
+            )
+        elif piece_type == "squadron":
+            # Squadrons can affect pieces in same district and possibly adjacent districts
+            squadron = self.squadron_repository.find_by_id(piece_id)
+            if not squadron:
+                return
+                
+            # Get mobility to determine range
+            mobility = squadron.mobility
             
-            # Find all enemy agents in this district that aren't in conflicts
-            for enemy_id, relationship in negative_relationships.items():
-                query = """
-                    SELECT a.id, a.name, a.faction_id
-                    FROM agents a
-                    LEFT JOIN conflict_pieces cp ON
-                        cp.piece_id = a.id 
-                        AND cp.piece_type = 'agent'
-                        AND cp.conflict_id IN (
-                            SELECT id FROM conflicts WHERE turn_number = :turn_number
-                        )
-                    WHERE a.district_id = :district_id
-                    AND a.faction_id = :enemy_id
-                    AND cp.conflict_id IS NULL
-                """
+            if mobility <= 0:
+                return  # Cannot apply penalties
                 
-                results = self.db_manager.execute_query(query, {
-                    "district_id": district_id,
-                    "enemy_id": enemy_id,
-                    "turn_number": turn_number
+            # Apply to pieces in same district
+            self._apply_squadron_penalties(
+                turn_number,
+                squadron,
+                faction_id, 
+                district_id,
+                False,  # Not adjacent
+                negative_relationships, 
+                applied_penalties
+            )
+            
+            # Apply to pieces in adjacent districts (if mobility allows)
+            if mobility >= 2:
+                for adjacent_id in district.adjacent_districts:
+                    self._apply_squadron_penalties(
+                        turn_number,
+                        squadron,
+                        faction_id, 
+                        adjacent_id,
+                        True,  # Is adjacent
+                        negative_relationships, 
+                        applied_penalties
+                    )
+
+    def _apply_agent_penalties(self, turn_number, agent_id, faction_id, district_id, 
+                            negative_relationships, applied_penalties):
+        """Apply penalties from an agent to valid targets.
+        
+        Args:
+            turn_number (int): Current turn number. 
+            agent_id (str): The agent's ID.
+            faction_id (str): The agent's faction ID.
+            district_id (str): The district ID.
+            negative_relationships (dict): Dictionary of faction_id to relationship value.
+            applied_penalties (dict): Dictionary to track applied penalties.
+        """
+        # Check if agent already applied penalty
+        if self.penalty_tracker.has_agent_applied_penalty(agent_id):
+            return
+        
+        # Get agent details for logging
+        agent = self.agent_repository.find_by_id(agent_id)
+        agent_name = agent.name if agent else "Unknown Agent"
+        
+        # Create prioritized list of potential targets
+        potential_targets = []
+        
+        # First by relationship (hot war before cold war)
+        for enemy_id, relationship in negative_relationships.items():
+            # Get all targets from this faction (both agents and squadrons)
+            enemy_agents = self._find_all_target_agents(turn_number, district_id, enemy_id)
+            enemy_squadrons = self._find_all_target_squadrons(turn_number, district_id, enemy_id)
+            
+            # Add to potential targets list with appropriate priority and penalty value
+            for agent in enemy_agents:
+                potential_targets.append({
+                    "action_id": agent["action_id"],
+                    "piece_id": agent["piece_id"],
+                    "piece_type": agent["piece_type"],
+                    "faction_id": enemy_id,
+                    "relationship": relationship,
+                    "priority": 0 if relationship == -2 else 2,  # Hot war agents = highest priority (0)
+                    "penalty": 4 if relationship == -2 else 2
                 })
                 
-                # Log the results for debugging
-                enemy_faction = self.faction_repository.find_by_id(enemy_id)
-                enemy_name = enemy_faction.name if enemy_faction else "Unknown"
-                logging.info(f"Found {len(results)} enemy agents for faction {enemy_name} (ID: {enemy_id}) in district {district_id} with relationship {relationship}")
-                
-                # For each agent from this faction, apply penalty if not already applied
-                for row in results:
-                    agent = dict(row)
-                    
-                    # Skip if this agent already applied a penalty (using tracker)
-                    if self.penalty_tracker.has_agent_applied_penalty(agent["id"]):
-                        logging.info(f"Agent {agent['name']} (ID: {agent['id']}) already applied its penalty this turn, skipping")
-                        continue
-                    
-                    # Apply penalty based on relationship
-                    if relationship == -2:  # Hot war
-                        penalty = 4
-                        reason = "Hot War"
-                    else:  # Cold war
-                        penalty = 2
-                        reason = "Cold War"
-                    
-                    # Add to running total
-                    total_penalty += penalty
-                    
-                    # Mark this agent as having applied a penalty
-                    self.penalty_tracker.mark_agent_penalty_applied(agent["id"])
-                    
-                    # Log the penalty being applied
-                    logging.info(f"Applying {penalty} penalty from agent {agent['name']} (ID: {agent['id']}) to piece {piece_id} (relationship: {relationship})")
-                    logging.info(f"Updated agent total_penalty value: {total_penalty}")
-                    
-                    # Add to breakdown
-                    penalty_breakdown.append({
-                        "source_type": "agent",
-                        "source_id": agent["id"],
-                        "source_name": agent["name"],
-                        "faction_id": enemy_id,
-                        "relationship": relationship,
-                        "reason": reason,
-                        "penalty": penalty
-                    })
-                    
-                    # Agents only target one piece in total for the entire turn, so break after applying penalty
-                    break
+            for squadron in enemy_squadrons:
+                potential_targets.append({
+                    "action_id": squadron["action_id"],
+                    "piece_id": squadron["piece_id"],
+                    "piece_type": squadron["piece_type"],
+                    "faction_id": enemy_id,
+                    "relationship": relationship,
+                    "priority": 1 if relationship == -2 else 3,  # Hot war squadrons = second priority (1)
+                    "penalty": 4 if relationship == -2 else 2
+                })
+        
+        # If no potential targets, exit
+        if not potential_targets:
+            logging.info(f"Agent {agent_name} found no potential targets in district {district_id}")
+            return
+        
+        # Sort targets by priority (lower values = higher priority)
+        potential_targets.sort(key=lambda x: x["priority"])
+        
+        # Group targets by priority
+        target_groups = {}
+        for target in potential_targets:
+            priority = target["priority"]
+            if priority not in target_groups:
+                target_groups[priority] = []
+            target_groups[priority].append(target)
+        
+        # Shuffle each priority group for more random distribution
+        for targets in target_groups.values():
+            random.shuffle(targets)
+        
+        # Reconstruct prioritized list
+        potential_targets = []
+        for priority in sorted(target_groups.keys()):
+            potential_targets.extend(target_groups[priority])
+        
+        # Now try to apply a penalty to the highest priority target
+        if potential_targets:
+            target = potential_targets[0]
+            # Apply penalty
+            penalty = target["penalty"]
             
-            # Log final penalties value for verification
-            final_penalty = total_penalty
-            penalty_delta = final_penalty - initial_penalty
-            logging.info(f"Agent penalties summary: initial={initial_penalty}, final={final_penalty}, delta={penalty_delta}")
+            self._add_penalty(turn_number, target["action_id"], penalty, 
+                            agent_id, "agent", applied_penalties)
+            self.penalty_tracker.mark_agent_penalty_applied(agent_id)
             
-            return total_penalty  # Return updated total_penalty for verification
-        except Exception as e:
-            logging.error(f"Error calculating enemy agent penalties: {str(e)}")
-            logging.exception("Full traceback for enemy agent penalty calculation error:")
-            return total_penalty
+            relationship_type = "Hot War" if target["relationship"] == -2 else "Cold War"
+            logging.info(f"Agent {agent_name} applied -{penalty} penalty to " + 
+                        f"{target['piece_type']} {target['piece_id']} ({relationship_type})")
 
-    def _calculate_enemy_squadron_penalties(self, district, faction_id, piece_id, piece_type, 
-                                    negative_relationships, turn_number, total_penalty, penalty_breakdown):
-        """Calculate penalties from enemy squadrons based on mobility and proximity.
+    def _apply_squadron_penalties(self, turn_number, squadron, faction_id, district_id, 
+                                is_adjacent, negative_relationships, applied_penalties):
+        """Apply penalties from a squadron to valid targets.
         
         Args:
-            district (District): District object where the piece is located.
-            faction_id (str): Faction ID of the piece.
-            piece_id (str): ID of the piece to calculate penalties for.
-            piece_type (str): Type of the piece ('agent' or 'squadron').
-            negative_relationships (dict): Dictionary of faction_id -> relationship value.
             turn_number (int): Current turn number.
-            total_penalty (int): Running total of penalties (modified in place).
-            penalty_breakdown (list): List of penalty details (modified in place).
+            squadron (Squadron): The squadron applying penalties.
+            faction_id (str): The squadron's faction ID.
+            district_id (str): The target district ID.
+            is_adjacent (bool): Whether the district is adjacent to squadron's district.
+            negative_relationships (dict): Dictionary of faction_id to relationship value.
+            applied_penalties (dict): Dictionary to track applied penalties.
+        """
+        # Get maximum targets based on mobility and remaining slots
+        max_targets = self.penalty_tracker._get_squadron_max_targets(squadron.mobility)
+        current_penalties = self.penalty_tracker.get_squadron_applied_penalties(squadron.id)
+        
+        # Determine how many more penalties this squadron can apply
+        remaining_same_district = max_targets['same_district'] - current_penalties['same_district']
+        remaining_adjacent_district = max_targets['adjacent_district'] - current_penalties['adjacent_district']
+        remaining_either_district = max_targets['either_district'] - current_penalties['either_district']
+        
+        # If we're in an adjacent district but have no adjacent slots left, check if we can use "either" slots
+        if is_adjacent and remaining_adjacent_district <= 0 and remaining_either_district <= 0:
+            logging.info(f"Squadron {squadron.name} has no remaining slots for adjacent district {district_id}")
+            return
+        
+        # If we're in same district but have no same slots left, check if we can use "either" slots
+        if not is_adjacent and remaining_same_district <= 0 and remaining_either_district <= 0:
+            logging.info(f"Squadron {squadron.name} has no remaining slots for same district {district_id}")
+            return
+        
+        # Log the remaining slots
+        logging.info(f"Squadron {squadron.name} has remaining slots: same={remaining_same_district}, " + 
+                    f"adjacent={remaining_adjacent_district}, either={remaining_either_district}")
+        
+        # Create list of potential targets by relationship and type priority
+        potential_targets = []
+        
+        # Build list of potential targets (all enemy factions)
+        for enemy_id, relationship in negative_relationships.items():
+            # First add squadrons (they're higher priority)
+            squadrons = self._find_all_target_squadrons(turn_number, district_id, enemy_id)
+            for target in squadrons:
+                potential_targets.append({
+                    "action_id": target["action_id"],
+                    "piece_id": target["piece_id"],
+                    "piece_type": target["piece_type"],
+                    "faction_id": enemy_id,
+                    "relationship": relationship,
+                    "penalty": 2 if relationship == -2 else 1
+                })
+            
+            # Then add agents
+            agents = self._find_all_target_agents(turn_number, district_id, enemy_id)
+            for target in agents:
+                potential_targets.append({
+                    "action_id": target["action_id"],
+                    "piece_id": target["piece_id"],
+                    "piece_type": target["piece_type"],
+                    "faction_id": enemy_id,
+                    "relationship": relationship,
+                    "penalty": 2 if relationship == -2 else 1
+                })
+        
+        # If no potential targets, exit
+        if not potential_targets:
+            logging.info(f"Squadron {squadron.name} found no potential targets in district {district_id}")
+            return
+        
+        # Sort targets by relationship priority (-2 before -1) and then piece type (squadrons before agents)
+        potential_targets.sort(key=lambda x: (x["relationship"], 0 if x["piece_type"] == "squadron" else 1))
+        
+        # Randomize targets within each priority level to prevent always targeting the same pieces
+        # Group targets by relationship and piece type
+        target_groups = {}
+        for target in potential_targets:
+            key = (target["relationship"], target["piece_type"])
+            if key not in target_groups:
+                target_groups[key] = []
+            target_groups[key].append(target)
+        
+        # Shuffle each group
+        for group in target_groups.values():
+            random.shuffle(group)
+        
+        # Reconstruct the list maintaining priority order
+        potential_targets = []
+        for key in sorted(target_groups.keys()):
+            potential_targets.extend(target_groups[key])
+        
+        # Apply penalties up to the maximum allowed
+        penalties_applied = 0
+        targets_affected = set()  # Track which targets we've already affected
+        
+        for target in potential_targets:
+            # Skip targets we've already affected
+            if target["action_id"] in targets_affected:
+                continue
+                
+            # Determine which slot type to use
+            slot_type = None
+            if is_adjacent:
+                if remaining_adjacent_district > 0:
+                    slot_type = 'adjacent_district'
+                    remaining_adjacent_district -= 1
+                elif remaining_either_district > 0:
+                    slot_type = 'either_district'
+                    remaining_either_district -= 1
+                else:
+                    break  # No more slots available
+            else:
+                if remaining_same_district > 0:
+                    slot_type = 'same_district'
+                    remaining_same_district -= 1
+                elif remaining_either_district > 0:
+                    slot_type = 'either_district'
+                    remaining_either_district -= 1
+                else:
+                    break  # No more slots available
+            
+            # Apply the penalty
+            self._add_penalty(turn_number, target["action_id"], target["penalty"], 
+                            squadron.id, "squadron", applied_penalties)
+            
+            # Mark this slot as used
+            self.penalty_tracker.mark_squadron_penalty_applied(squadron.id, slot_type)
+            
+            # Log the applied penalty
+            relationship_type = "Hot War" if target["relationship"] == -2 else "Cold War"
+            logging.info(f"Squadron {squadron.name} applied -{target['penalty']} penalty to " + 
+                        f"{target['piece_type']} {target['piece_id']} using {slot_type} slot ({relationship_type})")
+            
+            # Track that we've affected this target
+            targets_affected.add(target["action_id"])
+            penalties_applied += 1
+            
+            # Check if we've used all available slots
+            if (remaining_same_district <= 0 and 
+                remaining_adjacent_district <= 0 and 
+                remaining_either_district <= 0):
+                break
+        
+        logging.info(f"Squadron {squadron.name} applied {penalties_applied} total penalties in district {district_id}")   
+        
+    def _find_target_agent(self, turn_number, district_id, faction_id):
+        """Find a target agent in a district belonging to a specific faction.
+        
+        Args:
+            turn_number (int): Current turn number.
+            district_id (str): District to search in.
+            faction_id (str): Faction to target.
             
         Returns:
-            int: The updated total penalty amount (for verification only)
+            dict: Target information if found, None otherwise.
+        """
+        query = """
+            SELECT a.id as action_id, a.piece_id, a.piece_type
+            FROM actions a
+            WHERE a.turn_number = :turn_number
+            AND a.district_id = :district_id
+            AND a.faction_id = :faction_id
+            AND a.piece_type = 'agent'
+            ORDER BY RANDOM()
+            LIMIT 1
+        """
+        
+        results = self.db_manager.execute_query(query, {
+            "turn_number": turn_number,
+            "district_id": district_id,
+            "faction_id": faction_id
+        })
+        
+        if results:
+            return dict(results[0])
+        return None
+
+    def _find_target_squadron(self, turn_number, district_id, faction_id):
+        """Find a target squadron in a district belonging to a specific faction.
+        
+        Args:
+            turn_number (int): Current turn number.
+            district_id (str): District to search in.
+            faction_id (str): Faction to target.
+            
+        Returns:
+            dict: Target information if found, None otherwise.
+        """
+        query = """
+            SELECT a.id as action_id, a.piece_id, a.piece_type
+            FROM actions a
+            WHERE a.turn_number = :turn_number
+            AND a.district_id = :district_id
+            AND a.faction_id = :faction_id
+            AND a.piece_type = 'squadron'
+            ORDER BY RANDOM()
+            LIMIT 1
+        """
+        
+        results = self.db_manager.execute_query(query, {
+            "turn_number": turn_number,
+            "district_id": district_id,
+            "faction_id": faction_id
+        })
+        
+        if results:
+            return dict(results[0])
+        return None
+
+    def _add_penalty(self, turn_number, action_id, penalty, source_id, source_type, applied_penalties):
+        """Add a penalty to an action.
+        
+        Args:
+            turn_number (int): Current turn number.
+            action_id (str): Action ID to apply penalty to.
+            penalty (int): Penalty value to apply.
+            source_id (str): ID of the piece applying the penalty.
+            source_type (str): Type of the piece applying the penalty.
+            applied_penalties (dict): Dictionary to track applied penalties.
+        """
+        if action_id not in applied_penalties:
+            applied_penalties[action_id] = {}
+        
+        source_key = f"{source_type}_{source_id}"
+        applied_penalties[action_id][source_key] = penalty
+
+    def _save_applied_penalties(self, turn_number, applied_penalties):
+        """Save applied penalties to the database.
+        
+        Args:
+            turn_number (int): Current turn number.
+            applied_penalties (dict): Dictionary of applied penalties.
+        """
+        with self.db_manager.connection:
+            # First, create enemy_penalties table if it doesn't exist
+            self.db_manager.execute_update("""
+                CREATE TABLE IF NOT EXISTS enemy_penalties (
+                    id TEXT PRIMARY KEY,
+                    turn_number INTEGER NOT NULL,
+                    action_id TEXT NOT NULL,
+                    total_penalty INTEGER NOT NULL,
+                    penalty_breakdown TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    FOREIGN KEY (action_id) REFERENCES actions(id) ON DELETE CASCADE
+                )
+            """)
+            
+            # Store each action's penalties
+            for action_id, penalties in applied_penalties.items():
+                # Calculate total penalty
+                total_penalty = sum(penalties.values())
+                
+                # Store as a database record
+                query = """
+                    INSERT INTO enemy_penalties (
+                        id, turn_number, action_id, total_penalty, 
+                        penalty_breakdown, created_at, updated_at
+                    )
+                    VALUES (
+                        :id, :turn_number, :action_id, :total_penalty,
+                        :penalty_breakdown, :created_at, :updated_at
+                    )
+                """
+                
+                now = datetime.now().isoformat()
+                
+                self.db_manager.execute_update(query, {
+                    "id": str(uuid.uuid4()),
+                    "turn_number": turn_number,
+                    "action_id": action_id,
+                    "total_penalty": total_penalty,
+                    "penalty_breakdown": json.dumps(penalties),
+                    "created_at": now,
+                    "updated_at": now
+                })
+
+    def _get_enemy_penalties(self, action_id):
+        """Get enemy penalties for an action.
+        
+        Args:
+            action_id (str): Action ID.
+            
+        Returns:
+            tuple: (total_penalty, penalty_breakdown)
         """
         try:
-            # Ensure penalty tracker is initialized
-            if self.penalty_tracker is None:
-                logging.warning("Penalty tracker was not initialized. Initializing now.")
-                self.reset_penalty_tracker()
+            # Check if enemy_penalties table exists
+            check_query = """
+                SELECT name FROM sqlite_master 
+                WHERE type='table' AND name='enemy_penalties';
+            """
+            
+            table_exists = self.db_manager.execute_query(check_query)
+            
+            if not table_exists:
+                return 0, {}
+            
+            # Query for penalties
+            query = """
+                SELECT total_penalty, penalty_breakdown
+                FROM enemy_penalties
+                WHERE action_id = :action_id
+            """
+            
+            result = self.db_manager.execute_query(query, {"action_id": action_id})
+            
+            if not result:
+                return 0, {}
                 
-            # Record initial penalty value for verification
-            initial_penalty = total_penalty
-            logging.info(f"Initial total_penalty value: {initial_penalty}")
+            penalty = dict(result[0])
             
-            # Get all relevant districts (current and adjacent)
-            relevant_districts = [district.id] + district.adjacent_districts
-            logging.info(f"Checking for enemy squadrons in relevant districts: {relevant_districts}")
+            # Parse the penalty breakdown
+            try:
+                breakdown = json.loads(penalty["penalty_breakdown"])
+            except:
+                breakdown = {}
             
-            # Find all enemy squadrons in relevant districts that aren't in conflicts
-            for district_id in relevant_districts:
-                is_adjacent = district_id != district.id
-                district_name = self.district_repository.find_by_id(district_id).name if self.district_repository.find_by_id(district_id) else "Unknown"
-                
-                # If adjacent, need mobility 2+ to affect targets
-                mobility_clause = "AND s.mobility >= 2" if is_adjacent else ""
-                logging.info(f"Checking {district_name} (ID: {district_id}) - {'adjacent' if is_adjacent else 'same'} district with mobility clause: {mobility_clause}")
-                
-                for enemy_id, relationship in negative_relationships.items():
-                    enemy_faction = self.faction_repository.find_by_id(enemy_id)
-                    enemy_name = enemy_faction.name if enemy_faction else "Unknown"
-                    logging.info(f"Looking for squadrons of faction {enemy_name} (ID: {enemy_id}) with relationship {relationship} in district {district_id}")
-                    
-                    query = f"""
-                        SELECT s.id, s.name, s.faction_id, s.mobility, s.district_id
-                        FROM squadrons s
-                        LEFT JOIN conflict_pieces cp ON
-                            cp.piece_id = s.id 
-                            AND cp.piece_type = 'squadron'
-                            AND cp.conflict_id IN (
-                                SELECT id FROM conflicts WHERE turn_number = :turn_number
-                            )
-                        WHERE s.district_id = :district_id
-                        AND s.faction_id = :enemy_id
-                        {mobility_clause}
-                        AND cp.conflict_id IS NULL
-                    """
-                    
-                    results = self.db_manager.execute_query(query, {
-                        "district_id": district_id,
-                        "enemy_id": enemy_id,
-                        "turn_number": turn_number
-                    })
-                    
-                    # Log the results for debugging
-                    district_type = "adjacent" if is_adjacent else "same"
-                    logging.info(f"Found {len(results)} enemy squadrons for faction {enemy_name} (ID: {enemy_id}) in {district_type} district {district_name} (ID: {district_id}) with relationship {relationship}")
-                    
-                    for row in results:
-                        squadron = dict(row)
-                        logging.info(f"Squadron found: {squadron['name']} (ID: {squadron['id']}) with mobility {squadron['mobility']} in district {squadron['district_id']}")
-                        
-                        # Check if this squadron can still affect more pieces using the tracker
-                        can_affect, slot_type = self.penalty_tracker.can_squadron_apply_penalty(
-                            squadron["id"], is_adjacent, squadron["mobility"]
-                        )
-                        
-                        # Skip if squadron can't affect this target
-                        if not can_affect:
-                            logging.info(f"Skipping squadron {squadron['name']} - no available slots for {'adjacent' if is_adjacent else 'same'} district")
-                            continue
-                            
-                        logging.info(f"Squadron {squadron['name']} will use a {slot_type} slot")
-                        
-                        # Apply penalty based on relationship
-                        if relationship == -2:  # Hot war
-                            penalty = 2
-                            reason = "Hot War"
-                        else:  # Cold war
-                            penalty = 1
-                            reason = "Cold War"
-                        
-                        # Add to running total
-                        total_penalty += penalty
-                        
-                        # Mark that this squadron has applied a penalty
-                        self.penalty_tracker.mark_squadron_penalty_applied(squadron["id"], slot_type)
-                        
-                        # Log the penalty being applied
-                        logging.info(f"Applying {penalty} penalty from squadron {squadron['name']} (ID: {squadron['id']}) to piece {piece_id} (relationship: {relationship})")
-                        logging.info(f"Updated total_penalty value: {total_penalty}")
-                        
-                        # Add to breakdown
-                        penalty_breakdown.append({
-                            "source_type": "squadron",
-                            "source_id": squadron["id"],
-                            "source_name": squadron["name"],
-                            "faction_id": enemy_id,
-                            "relationship": relationship,
-                            "reason": reason,
-                            "penalty": penalty,
-                            "is_adjacent": is_adjacent,
-                            "mobility": squadron["mobility"],
-                            "slot_type": slot_type
-                        })
-            
-            # Log final penalties value for verification
-            final_penalty = total_penalty
-            penalty_delta = final_penalty - initial_penalty
-            logging.info(f"Squadron penalties summary: initial={initial_penalty}, final={final_penalty}, delta={penalty_delta}")
-            
-            return total_penalty  # Return updated total_penalty for verification
-            
+            return penalty["total_penalty"], breakdown
         except Exception as e:
-            logging.error(f"Error calculating enemy squadron penalties: {str(e)}")
-            logging.exception("Full traceback for enemy squadron penalty calculation error:")
-            return total_penalty
-
+            logging.error(f"Error getting enemy penalties: {str(e)}")
+            return 0, {}
+        
     def roll_for_action(self, action_id):
         """Roll dice for an action.
         
@@ -1624,7 +1917,7 @@ class ActionManager:
             action_id (str): Action ID.
             
         Returns:
-            dict: Roll results, including roll value and outcome tier.
+                dict: Roll results, including roll value and outcome tier.
         """
         try:
             # Get action details
@@ -1638,7 +1931,7 @@ class ActionManager:
             if not result:
                 logging.error(f"Action {action_id} not found")
                 return {"error": "Action not found"}
-                
+                    
             action = dict(result[0])
             
             # Determine if this is a secondary monitoring action for a squadron
@@ -1675,17 +1968,11 @@ class ActionManager:
                 attribute_bonus = agent.get_attribute(action["attribute_used"]) if action["attribute_used"] else 0
                 skill_bonus = agent.get_skill(action["skill_used"]) if action["skill_used"] else 0
                 
-                # Calculate enemy piece penalties
-                enemy_penalty, penalty_breakdown = self._calculate_enemy_piece_penalties(
-                    action["piece_id"],
-                    action["piece_type"],
-                    action["faction_id"],
-                    action["district_id"],
-                    action["turn_number"]
-                )
+                # Get enemy penalties from database
+                enemy_penalty, penalty_breakdown = self._get_enemy_penalties(action["id"])
                 
                 # Add explicit debugging logs for enemy penalties
-                logging.info(f"ROLL DEBUG: Enemy penalty calculation result for agent: penalty={enemy_penalty}, has_breakdown={len(penalty_breakdown) > 0}")
+                logging.info(f"ROLL DEBUG: Enemy penalty calculation for agent: penalty={enemy_penalty}, has_breakdown={len(penalty_breakdown) > 0}")
                 
                 # Calculate roll without enemy penalty first
                 roll_without_penalty = base_roll + attribute_bonus + skill_bonus + action["manual_modifier"]
@@ -1694,7 +1981,7 @@ class ActionManager:
                 total_roll = roll_without_penalty - enemy_penalty
                 
                 # Add debug log for roll components
-                logging.info(f"ROLL DEBUG: Roll components for agent: base_roll={base_roll}, attribute_bonus={attribute_bonus}, skill_bonus={skill_bonus}, manual_modifier={action['manual_modifier']}, enemy_penalty={enemy_penalty}")
+                logging.info(f"ROLL DEBUG: Roll components: base_roll={base_roll}, attribute_bonus={attribute_bonus}, skill_bonus={skill_bonus}, manual_modifier={action['manual_modifier']}, enemy_penalty={enemy_penalty}")
                 logging.info(f"ROLL DEBUG: Total roll without enemy penalty: {roll_without_penalty}")
                 logging.info(f"ROLL DEBUG: Final total roll after enemy penalty subtraction: {total_roll}")
                 
@@ -1719,17 +2006,11 @@ class ActionManager:
                 # Apply aptitude bonus
                 aptitude_bonus = squadron.get_aptitude(action["aptitude_used"]) if action["aptitude_used"] else 0
                 
-                # Calculate enemy piece penalties
-                enemy_penalty, penalty_breakdown = self._calculate_enemy_piece_penalties(
-                    action["piece_id"],
-                    action["piece_type"],
-                    action["faction_id"],
-                    action["district_id"],
-                    action["turn_number"]
-                )
+                # Get enemy penalties from database
+                enemy_penalty, penalty_breakdown = self._get_enemy_penalties(action["id"])
                 
                 # Add explicit debugging logs for enemy penalties
-                logging.info(f"ROLL DEBUG: Enemy penalty calculation result for squadron: penalty={enemy_penalty}, has_breakdown={len(penalty_breakdown) > 0}")
+                logging.info(f"ROLL DEBUG: Enemy penalty calculation for squadron: penalty={enemy_penalty}, has_breakdown={len(penalty_breakdown) > 0}")
                 
                 # Calculate roll without enemy penalty first
                 roll_without_penalty = base_roll + aptitude_bonus + action["manual_modifier"]
@@ -1738,7 +2019,7 @@ class ActionManager:
                 total_roll = roll_without_penalty - enemy_penalty
                 
                 # Add debug log for roll components
-                logging.info(f"ROLL DEBUG: Roll components for squadron: base_roll={base_roll}, aptitude_bonus={aptitude_bonus}, manual_modifier={action['manual_modifier']}, enemy_penalty={enemy_penalty}")
+                logging.info(f"ROLL DEBUG: Roll components: base_roll={base_roll}, aptitude_bonus={aptitude_bonus}, manual_modifier={action['manual_modifier']}, enemy_penalty={enemy_penalty}")
                 logging.info(f"ROLL DEBUG: Total roll without enemy penalty: {roll_without_penalty}")
                 logging.info(f"ROLL DEBUG: Final total roll after enemy penalty subtraction: {total_roll}")
                 
@@ -1824,8 +2105,7 @@ class ActionManager:
         except Exception as e:
             logging.error(f"Error in roll_for_action: {str(e)}")
             return {"error": str(e)}
-
-    # Add helper method to the ActionManager class
+        
     def get_all_faction_ids(self):
         """Get all faction IDs in the system.
         
@@ -1839,3 +2119,59 @@ class ActionManager:
         except Exception as e:
             logging.error(f"Error getting faction IDs: {str(e)}")
             return []
+        
+    def _find_all_target_agents(self, turn_number, district_id, faction_id):
+        """Find all target agents in a district belonging to a specific faction.
+        
+        Args:
+            turn_number (int): Current turn number.
+            district_id (str): District to search in.
+            faction_id (str): Faction to target.
+            
+        Returns:
+            list: List of target information dictionaries.
+        """
+        query = """
+            SELECT a.id as action_id, a.piece_id, a.piece_type
+            FROM actions a
+            WHERE a.turn_number = :turn_number
+            AND a.district_id = :district_id
+            AND a.faction_id = :faction_id
+            AND a.piece_type = 'agent'
+        """
+        
+        results = self.db_manager.execute_query(query, {
+            "turn_number": turn_number,
+            "district_id": district_id,
+            "faction_id": faction_id
+        })
+        
+        return [dict(row) for row in results]
+
+    def _find_all_target_squadrons(self, turn_number, district_id, faction_id):
+        """Find all target squadrons in a district belonging to a specific faction.
+        
+        Args:
+            turn_number (int): Current turn number.
+            district_id (str): District to search in.
+            faction_id (str): Faction to target.
+            
+        Returns:
+            list: List of target information dictionaries.
+        """
+        query = """
+            SELECT a.id as action_id, a.piece_id, a.piece_type
+            FROM actions a
+            WHERE a.turn_number = :turn_number
+            AND a.district_id = :district_id
+            AND a.faction_id = :faction_id
+            AND a.piece_type = 'squadron'
+        """
+        
+        results = self.db_manager.execute_query(query, {
+            "turn_number": turn_number,
+            "district_id": district_id,
+            "faction_id": faction_id
+        })
+        
+        return [dict(row) for row in results]

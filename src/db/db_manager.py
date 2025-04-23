@@ -4,6 +4,12 @@ import os
 from datetime import datetime
 import threading
 
+from .repositories.district import DistrictRepository
+from .repositories.faction import FactionRepository
+from .repositories.agent import AgentRepository
+from .repositories.squadron import SquadronRepository
+from .repositories.rumor import RumorRepository
+
 
 class DatabaseManager:
     """Manager class for database connection and operations."""
@@ -426,6 +432,23 @@ class DatabaseManager:
             self.connection.execute("CREATE INDEX idx_actions_district ON actions(district_id)")
             self.connection.execute("CREATE INDEX idx_actions_piece_id ON actions(piece_id)")
             
+            # Enemy Penalties
+            self.connection.execute("""
+                CREATE TABLE IF NOT EXISTS enemy_penalties (
+                    id TEXT PRIMARY KEY,
+                    turn_number INTEGER NOT NULL,
+                    action_id TEXT NOT NULL,
+                    total_penalty INTEGER NOT NULL,
+                    penalty_breakdown TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    FOREIGN KEY (action_id) REFERENCES actions(id) ON DELETE CASCADE
+                )
+            """)
+            
+            self.connection.execute("CREATE INDEX idx_enemy_penalties_turn ON enemy_penalties(turn_number)")
+            self.connection.execute("CREATE INDEX idx_enemy_penalties_action ON enemy_penalties(action_id)")
+            
             # Create decay_results table
             self.connection.execute("""
                 CREATE TABLE decay_results (
@@ -603,3 +626,28 @@ class DatabaseManager:
         if hasattr(self._local, 'connection') and self._local.connection:
             self._local.connection.close()
             self._local.connection = None
+    
+    def get_repository(self, repository_name):
+        """Get a repository instance by name.
+        
+        Args:
+            repository_name (str): The name of the repository to get.
+            
+        Returns:
+            Repository: The repository instance.
+            
+        Raises:
+            ValueError: If repository_name is not valid.
+        """
+        repositories = {
+            "district": DistrictRepository,
+            "faction": FactionRepository,
+            "agent": AgentRepository,
+            "squadron": SquadronRepository,
+            "rumor": RumorRepository
+        }
+        
+        if repository_name not in repositories:
+            raise ValueError(f"Unknown repository name: {repository_name}")
+            
+        return repositories[repository_name](self)

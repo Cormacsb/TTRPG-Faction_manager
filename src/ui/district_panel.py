@@ -2,6 +2,8 @@ import tkinter as tk
 from tkinter import ttk, messagebox
 import logging
 
+from ..models.rumor import Rumor  # Add this import at the top
+
 
 class DistrictPanel:
     """Panel for managing districts."""
@@ -17,6 +19,7 @@ class DistrictPanel:
         self.parent = parent
         self.db_manager = db_manager
         self.district_repository = district_repository
+        self.current_district_id = None  # Track the currently selected district
         
         # Create main frame
         self.frame = ttk.Frame(parent)
@@ -645,6 +648,9 @@ class DistrictPanel:
         # Get district ID
         district_id = self.district_tree.item(selection[0], "values")[0]
         
+        # Store the current district ID
+        self.current_district_id = district_id
+        
         # Load district details
         self.load_district_details(district_id)
     
@@ -778,6 +784,7 @@ class DistrictPanel:
     
     def clear_form(self):
         """Clear the district detail form."""
+        self.current_district_id = None
         self.id_var.set("")
         self.name_var.set("")
         self.description_text.delete(1.0, tk.END)
@@ -1385,6 +1392,14 @@ class DistrictPanel:
             logging.error(f"Error removing adjacency: {str(e)}")
             messagebox.showerror("Error", f"Failed to remove adjacency: {str(e)}")
             
+    def get_rumor_repository(self):
+        """Get the rumor repository.
+        
+        Returns:
+            RumorRepository: Repository for rumor operations.
+        """
+        return self.db_manager.get_repository("rumor")
+    
     def add_rumor(self):
         """Add a new rumor to the current district."""
         try:
@@ -1442,7 +1457,6 @@ class DistrictPanel:
                         return
                         
                     # Create rumor
-                    from src.models.rumor import Rumor
                     rumor = Rumor(
                         district_id=district.id,
                         rumor_text=text,
@@ -1450,8 +1464,8 @@ class DistrictPanel:
                         is_discovered=False
                     )
                     
-                    # Get rumor repository from District Panel initialization
-                    rumor_repository = self.db_manager.get_repository("rumor")
+                    # Get rumor repository
+                    rumor_repository = self.get_rumor_repository()
                     
                     # Save to database
                     if rumor_repository.create(rumor):
@@ -1491,8 +1505,8 @@ class DistrictPanel:
             item = self.rumors_tree.item(selection[0])
             rumor_id = item['values'][0]
             
-            # Get rumor repository from District Panel initialization
-            rumor_repository = self.db_manager.get_repository("rumor")
+            # Get rumor repository
+            rumor_repository = self.get_rumor_repository()
             
             # Get rumor data
             rumor = rumor_repository.find_by_id(rumor_id)
@@ -1602,31 +1616,21 @@ class DistrictPanel:
                                       f"Are you sure you want to remove this rumor?"):
                 return
             
-            # Get rumor repository from District Panel initialization
-            rumor_repository = self.db_manager.get_repository("rumor")
+            # Get rumor repository
+            rumor_repository = self.get_rumor_repository()
             
-            # Remove rumor
-            with self.db_manager.connection:
-                # First delete faction knowledge
-                self.db_manager.execute_update(
-                    "DELETE FROM faction_known_rumors WHERE rumor_id = :rumor_id",
-                    {"rumor_id": rumor_id}
-                )
+            # Remove rumor using the repository
+            if rumor_repository.delete(rumor_id):
+                # Get district data
+                district = self.district_repository.find_by_id(self.current_district_id)
                 
-                # Then delete the rumor itself
-                self.db_manager.execute_update(
-                    "DELETE FROM district_rumors WHERE id = :id",
-                    {"id": rumor_id}
-                )
-            
-            # Get district data
-            district = self.district_repository.find_by_id(self.current_district_id)
-            
-            # Reload rumors data
-            self.load_rumors_data(district)
-            
-            # Log success
-            logging.info(f"Removed rumor {rumor_id} from district {self.current_district_id}")
+                # Reload rumors data
+                self.load_rumors_data(district)
+                
+                # Log success
+                logging.info(f"Removed rumor {rumor_id} from district {self.current_district_id}")
+            else:
+                messagebox.showerror("Error", "Failed to remove rumor.")
             
         except Exception as e:
             logging.error(f"Error removing rumor: {str(e)}")

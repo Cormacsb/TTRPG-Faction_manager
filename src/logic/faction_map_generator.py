@@ -161,6 +161,22 @@ class FactionMapGenerator:
         # Get the weekly intelligence summary for this faction
         weekly_summary = self.monitoring_manager.generate_weekly_intelligence_summary(faction.id, turn_number)
         
+        # Check if weekly_summary has the expected structure
+        if not weekly_summary or not isinstance(weekly_summary, dict):
+            logging.error(f"Invalid weekly summary for faction {faction.name}")
+            weekly_summary = {"districts": {}}
+        
+        # Ensure districts is a dictionary, not a list
+        if "districts" not in weekly_summary or not weekly_summary["districts"]:
+            weekly_summary["districts"] = {}
+        elif isinstance(weekly_summary["districts"], list):
+            # Convert list of districts to a dictionary keyed by district_id
+            districts_dict = {}
+            for district_data in weekly_summary["districts"]:
+                if isinstance(district_data, dict) and "district_id" in district_data:
+                    districts_dict[district_data["district_id"]] = district_data
+            weekly_summary["districts"] = districts_dict
+        
         # Get faction's actual influence data
         actual_influence = {}
         actual_strongholds = {}
@@ -171,18 +187,31 @@ class FactionMapGenerator:
         # Process each district
         for district in districts:
             # Skip districts without shape data
-            if not district.shape_data or not district.shape_data.get("points"):
+            if not district.shape_data:
                 continue
-            
-            # Get district points
-            points = district.shape_data.get("points")
+                
+            # Get district points - handle both dictionary and list formats
+            points = []
+            if isinstance(district.shape_data, dict) and district.shape_data.get("points"):
+                points = district.shape_data.get("points")
+            elif isinstance(district.shape_data, list):
+                points = district.shape_data
+            else:
+                continue
+                
             if len(points) < 3:  # Need at least 3 points for a polygon
                 continue
             
             # Convert points to pixel coordinates
             pixel_points = []
             for point in points:
-                pixel_points.append((point["x"], point["y"]))
+                if isinstance(point, dict) and "x" in point and "y" in point:
+                    pixel_points.append((point["x"], point["y"]))
+                elif isinstance(point, (list, tuple)) and len(point) >= 2:
+                    pixel_points.append((point[0], point[1]))
+            
+            if len(pixel_points) < 3:  # Need at least 3 points for a polygon
+                continue
             
             # Make district shape completely transparent - no fill, no border
             # This makes the underlying base map completely visible
@@ -192,24 +221,48 @@ class FactionMapGenerator:
             centroid_y = sum(p[1] for p in pixel_points) / len(pixel_points)
             
             # Get monitoring data for this district
-            district_data = weekly_summary.get("districts", {}).get(district.id)
+            district_data = None
+            district_id = district.id
+            
+            # Try to get district data from the weekly summary
+            if isinstance(weekly_summary.get("districts"), dict):
+                district_data = weekly_summary["districts"].get(district_id)
+            elif isinstance(weekly_summary.get("districts"), list):
+                # If districts is a list, find the matching district by ID
+                for d in weekly_summary["districts"]:
+                    if isinstance(d, dict) and d.get("district_id") == district_id:
+                        district_data = d
+                        break
+            
             confidence = 0
             perceived_influences = {}
             perceived_strongholds = {}
             
             if district_data:
-                confidence = district_data.get("confidence_rating", 0)
-                
-                # Get perceived influences
-                for faction_id, value in district_data.get("perceived_influences", {}).items():
-                    perceived_influences[faction_id] = value
-                
-                # Get perceived strongholds
-                perceived_strongholds = district_data.get("perceived_strongholds", {})
-                
-                # Add phantom detections
-                for phantom in district_data.get("phantom_detections", []):
-                    perceived_influences[phantom["faction_id"]] = phantom["perceived_influence"]
+                # Handle confidence rating
+                if isinstance(district_data, dict):
+                    confidence = district_data.get("confidence_rating", 0)
+                    
+                    # Get perceived influences - handle both dictionary and factions_detected list
+                    if "perceived_influences" in district_data and isinstance(district_data["perceived_influences"], dict):
+                        perceived_influences = district_data["perceived_influences"]
+                    elif "factions_detected" in district_data and isinstance(district_data["factions_detected"], list):
+                        # Convert factions_detected list to a dictionary of perceived influences
+                        for faction_data in district_data["factions_detected"]:
+                            if isinstance(faction_data, dict) and "faction_id" in faction_data and "influence" in faction_data:
+                                perceived_influences[faction_data["faction_id"]] = faction_data["influence"]
+                    
+                    # Get perceived strongholds
+                    perceived_strongholds = district_data.get("perceived_strongholds", {})
+                    
+                    # Add phantom detections
+                    if "phantom_detections" in district_data and isinstance(district_data["phantom_detections"], list):
+                        for phantom in district_data["phantom_detections"]:
+                            if isinstance(phantom, dict) and "faction_id" in phantom and "perceived_influence" in phantom:
+                                perceived_influences[phantom["faction_id"]] = phantom["perceived_influence"]
+                    elif "factions_detected" in district_data and isinstance(district_data["factions_detected"], list):
+                        # If using factions_detected format, phantom detections are already included
+                        pass
             
             # Draw district name
             district_name = district.name
@@ -558,18 +611,31 @@ class FactionMapGenerator:
             # Process each district
             for district in districts:
                 # Skip districts without shape data
-                if not district.shape_data or not district.shape_data.get("points"):
+                if not district.shape_data:
                     continue
                 
-                # Get district points
-                points = district.shape_data.get("points")
+                # Get district points - handle both dictionary and list formats
+                points = []
+                if isinstance(district.shape_data, dict) and district.shape_data.get("points"):
+                    points = district.shape_data.get("points")
+                elif isinstance(district.shape_data, list):
+                    points = district.shape_data
+                else:
+                    continue
+                
                 if len(points) < 3:  # Need at least 3 points for a polygon
                     continue
                 
                 # Convert points to pixel coordinates
                 pixel_points = []
                 for point in points:
-                    pixel_points.append((point["x"], point["y"]))
+                    if isinstance(point, dict) and "x" in point and "y" in point:
+                        pixel_points.append((point["x"], point["y"]))
+                    elif isinstance(point, (list, tuple)) and len(point) >= 2:
+                        pixel_points.append((point[0], point[1]))
+                
+                if len(pixel_points) < 3:  # Need at least 3 points for a polygon
+                    continue
                 
                 # No district shapes are drawn - we keep the base map fully visible
                 

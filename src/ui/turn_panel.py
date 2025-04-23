@@ -124,30 +124,37 @@ class TurnPanel(ttk.Frame):
         self.process_turn_part2_button.grid(row=0, column=1, padx=5, pady=5, sticky="w")
         self.process_turn_part2_button.config(state="disabled")  # Initially disabled
         
+        # Reset button
+        self.reset_button = ttk.Button(
+            controls_frame, text="Reset Turn Processing",
+            command=self._reset_turn_processing
+        )
+        self.reset_button.grid(row=0, column=2, padx=5, pady=5, sticky="w")
+        
         # Spacer
-        ttk.Label(controls_frame, text="").grid(row=0, column=2, padx=20, pady=5)
+        ttk.Label(controls_frame, text="").grid(row=0, column=3, padx=20, pady=5)
         
         # Status indicator
         self.status_label = ttk.Label(controls_frame, text="Status: Ready")
-        self.status_label.grid(row=0, column=3, padx=5, pady=5, sticky="w")
+        self.status_label.grid(row=0, column=4, padx=5, pady=5, sticky="w")
         
         # Progress indicator
         self.progress_var = tk.DoubleVar()
         self.progress_bar = ttk.Progressbar(
             controls_frame, variable=self.progress_var, maximum=100
         )
-        self.progress_bar.grid(row=0, column=4, padx=5, pady=5, sticky="ew")
+        self.progress_bar.grid(row=0, column=5, padx=5, pady=5, sticky="ew")
         
         # Emergency stop button
         self.stop_button = ttk.Button(
             controls_frame, text="Stop Processing", 
             command=self._stop_processing
         )
-        self.stop_button.grid(row=0, column=5, padx=5, pady=5, sticky="w")
+        self.stop_button.grid(row=0, column=6, padx=5, pady=5, sticky="w")
         self.stop_button.config(state="disabled")  # Initially disabled
         
         # Configure grid weights
-        controls_frame.columnconfigure(4, weight=1)  # Make progress bar expandable
+        controls_frame.columnconfigure(5, weight=1)  # Make progress bar expandable
     
     def _create_current_phase_display(self):
         """Create the current phase display section."""
@@ -248,39 +255,79 @@ class TurnPanel(ttk.Frame):
         self.action_roll_tree.heading("faction", text="Faction")
         self.action_roll_tree.heading("piece", text="Piece")
         self.action_roll_tree.heading("district", text="District")
-        self.action_roll_tree.heading("action_type", text="Action")
-        self.action_roll_tree.heading("roll", text="Roll")
+        self.action_roll_tree.heading("action_type", text="Action Type")
+        self.action_roll_tree.heading("roll", text="Roll Details")
         self.action_roll_tree.heading("outcome", text="Outcome")
         
-        self.action_roll_tree.column("id", width=50)
-        self.action_roll_tree.column("faction", width=100)
-        self.action_roll_tree.column("piece", width=100)
-        self.action_roll_tree.column("district", width=100)
-        self.action_roll_tree.column("action_type", width=100)
-        self.action_roll_tree.column("roll", width=50)
+        self.action_roll_tree.column("id", width=80)
+        self.action_roll_tree.column("faction", width=120)
+        self.action_roll_tree.column("piece", width=120)
+        self.action_roll_tree.column("district", width=120)
+        self.action_roll_tree.column("action_type", width=120)
+        self.action_roll_tree.column("roll", width=200)
         self.action_roll_tree.column("outcome", width=100)
         
         self.action_roll_tree.grid(row=1, column=0, sticky="nsew", padx=5, pady=5)
         
-        action_roll_frame.rowconfigure(1, weight=1)
-        action_roll_frame.columnconfigure(0, weight=1)
-        
         # Add scrollbar
-        action_roll_scrollbar = ttk.Scrollbar(action_roll_frame, orient="vertical", command=self.action_roll_tree.yview)
-        self.action_roll_tree.configure(yscrollcommand=action_roll_scrollbar.set)
-        action_roll_scrollbar.grid(row=1, column=1, sticky="ns")
+        action_scrollbar = ttk.Scrollbar(action_roll_frame, orient="vertical", command=self.action_roll_tree.yview)
+        self.action_roll_tree.configure(yscrollcommand=action_scrollbar.set)
+        action_scrollbar.grid(row=1, column=1, sticky="ns")
         
-        # Action roll details
-        action_roll_details_frame = ttk.LabelFrame(action_roll_frame, text="Roll Details")
-        action_roll_details_frame.grid(row=2, column=0, columnspan=2, sticky="nsew", padx=5, pady=5)
-        
-        self.action_roll_details_text = tk.Text(action_roll_details_frame, height=8, width=70)
-        self.action_roll_details_text.pack(padx=5, pady=5, fill="both", expand=True)
-        
-        # Connect selection event
+        # Connect event handler
         self.action_roll_tree.bind("<<TreeviewSelect>>", self._on_action_roll_selected)
         
-        # Conflict resolution phase UI
+        action_roll_frame.columnconfigure(0, weight=1)
+        action_roll_frame.rowconfigure(1, weight=1)
+        
+        # Enemy Penalty UI
+        enemy_penalty_frame = ttk.Frame(self.action_roll_frame)
+        enemy_penalty_frame.pack(fill="both", expand=True, pady=10)
+        
+        # Enemy penalty results table
+        ttk.Label(enemy_penalty_frame, text="Enemy Penalties:").grid(row=0, column=0, sticky="w", padx=5, pady=5)
+        
+        self.enemy_penalty_tree = ttk.Treeview(
+            enemy_penalty_frame,
+            columns=("id", "faction", "piece", "district", "penalty", "sources"),
+            show="headings"
+        )
+        
+        self.enemy_penalty_tree.heading("id", text="Action ID")
+        self.enemy_penalty_tree.heading("faction", text="Faction")
+        self.enemy_penalty_tree.heading("piece", text="Piece")
+        self.enemy_penalty_tree.heading("district", text="District")
+        self.enemy_penalty_tree.heading("penalty", text="Penalty")
+        self.enemy_penalty_tree.heading("sources", text="Sources")
+        
+        self.enemy_penalty_tree.column("id", width=80)
+        self.enemy_penalty_tree.column("faction", width=120)
+        self.enemy_penalty_tree.column("piece", width=120)
+        self.enemy_penalty_tree.column("district", width=120)
+        self.enemy_penalty_tree.column("penalty", width=60)
+        self.enemy_penalty_tree.column("sources", width=60)
+        
+        self.enemy_penalty_tree.grid(row=1, column=0, sticky="nsew", padx=5, pady=5)
+        
+        # Add scrollbar
+        penalty_scrollbar = ttk.Scrollbar(enemy_penalty_frame, orient="vertical", command=self.enemy_penalty_tree.yview)
+        self.enemy_penalty_tree.configure(yscrollcommand=penalty_scrollbar.set)
+        penalty_scrollbar.grid(row=1, column=1, sticky="ns")
+        
+        # Penalty details
+        ttk.Label(enemy_penalty_frame, text="Penalty Details:").grid(row=2, column=0, sticky="w", padx=5, pady=5)
+        
+        self.penalty_details_text = tk.Text(enemy_penalty_frame, height=6, width=40)
+        self.penalty_details_text.grid(row=3, column=0, columnspan=2, sticky="nsew", padx=5, pady=5)
+        
+        # Connect event handler
+        self.enemy_penalty_tree.bind("<<TreeviewSelect>>", self._on_penalty_selected)
+        
+        enemy_penalty_frame.columnconfigure(0, weight=1)
+        enemy_penalty_frame.rowconfigure(1, weight=1)
+        enemy_penalty_frame.rowconfigure(3, weight=1)
+        
+        # Conflict detection and resolution UI
         self._create_conflict_resolution_ui()
         
         # Action resolution phase UI
@@ -585,10 +632,11 @@ class TurnPanel(ttk.Frame):
             'influence_decay': 1,
             'assignment': 2,
             'conflict_detection': 3,
-            'action_roll': 4,
-            'manual_conflict_resolution': 5,
-            'action_resolution': 6,
-            'monitoring': 7
+            'enemy_penalty': 4,
+            'action_roll': 5,
+            'manual_conflict_resolution': 6,
+            'action_resolution': 7,
+            'monitoring': 8
         }
         
         if phase in phase_to_tab:
@@ -955,6 +1003,95 @@ class TurnPanel(ttk.Frame):
                 logging.error(f"[UI_DEBUG] Error loading action roll data: {str(e)}")
                 logging.exception("[UI_DEBUG] Full traceback:")
         
+        elif phase == 'enemy_penalty':
+            logging.info("[UI_DEBUG] Loading enemy penalty data")
+            try:
+                # Get current turn
+                turn_number = self.turn_info['current_turn']
+                
+                # Clear existing items
+                for item in self.enemy_penalty_tree.get_children():
+                    self.enemy_penalty_tree.delete(item)
+                
+                # Check if enemy_penalties table exists
+                check_query = """
+                    SELECT name FROM sqlite_master 
+                    WHERE type='table' AND name='enemy_penalties';
+                """
+                
+                table_exists = self.db_manager.execute_query(check_query)
+                
+                if not table_exists:
+                    self.enemy_penalty_tree.insert(
+                        "", "end", 
+                        values=("No enemy penalties table exists", "", "", "", "", "")
+                    )
+                    return
+                
+                # Get penalties for this turn
+                query = """
+                    SELECT ep.action_id, ep.total_penalty, ep.penalty_breakdown,
+                           a.piece_id, a.piece_type, a.faction_id, a.district_id
+                    FROM enemy_penalties ep
+                    JOIN actions a ON ep.action_id = a.id
+                    WHERE ep.turn_number = :turn_number
+                """
+                
+                results = self.db_manager.execute_query(query, {"turn_number": turn_number})
+                
+                if not results:
+                    self.enemy_penalty_tree.insert(
+                        "", "end", 
+                        values=("No penalties found", "", "", "", "", "")
+                    )
+                    return
+                    
+                # Add penalties to tree
+                for row in results:
+                    penalty = dict(row)
+                    
+                    # Get faction name
+                    faction = self.faction_repository.find_by_id(penalty["faction_id"])
+                    faction_name = faction.name if faction else "Unknown"
+                    
+                    # Get piece name
+                    piece_name = "Unknown"
+                    if penalty["piece_type"] == "agent":
+                        agent = self.agent_repository.find_by_id(penalty["piece_id"])
+                        piece_name = agent.name if agent else "Unknown"
+                    elif penalty["piece_type"] == "squadron":
+                        squadron = self.squadron_repository.find_by_id(penalty["piece_id"])
+                        piece_name = squadron.name if squadron else "Unknown"
+                    
+                    # Get district name
+                    district = self.district_repository.find_by_id(penalty["district_id"])
+                    district_name = district.name if district else "Unknown"
+                    
+                    # Parse penalty breakdown to count sources
+                    try:
+                        breakdown = json.loads(penalty["penalty_breakdown"])
+                        source_count = len(breakdown)
+                    except:
+                        source_count = 0
+                    
+                    # Add to tree
+                    self.enemy_penalty_tree.insert(
+                        "", "end",
+                        values=(
+                            penalty["action_id"][:8],
+                            faction_name,
+                            f"{penalty['piece_type'].title()}: {piece_name}",
+                            district_name,
+                            penalty["total_penalty"],
+                            source_count
+                        )
+                    )
+                
+            except Exception as e:
+                logging.error(f"[UI_DEBUG] Error loading enemy penalty data: {str(e)}")
+                logging.exception("[UI_DEBUG] Full traceback:")
+
+
         elif phase == 'conflict_detection':
             logging.info("[UI_DEBUG] Loading conflict data")
             self._load_conflict_data()
@@ -1347,8 +1484,7 @@ class TurnPanel(ttk.Frame):
         manual_modifier = action["manual_modifier"] or 0
         conflict_penalty = action["conflict_penalty"] or 0
         
-        # Get enemy penalty information from action manager
-        from src.logic.action import ActionManager
+        # Create an action manager instance to get enemy penalties
         action_manager = ActionManager(
             self.db_manager,
             self.district_repository,
@@ -1357,43 +1493,16 @@ class TurnPanel(ttk.Frame):
             self.squadron_repository
         )
         
-        # Calculate enemy penalties for display
-        enemy_penalty = 0
-        penalty_breakdown = []
-        
+        # Get enemy penalty information using the new method
         try:
-            # Check if we have an action roll result saved
-            if action["roll_result"] is not None:
-                # Log beginning of enemy penalty calculation
-                logging.info(f"Starting enemy penalty calculation for action {action['id']}")
-                
-                # Try to get enemy penalty breakdown directly (calculate for current state)
-                enemy_penalty, penalty_breakdown = action_manager._calculate_enemy_piece_penalties(
-                    action["piece_id"],
-                    action["piece_type"],
-                    action["faction_id"],
-                    action["district_id"],
-                    action["turn_number"]
-                )
-                
-                # Log the enemy penalty calculation
-                logging.info(f"Action {action['id']} calculated enemy penalty: {enemy_penalty}, breakdown: {json.dumps(penalty_breakdown)}")
-                
-                # Additional debug info
-                if not penalty_breakdown and enemy_penalty == 0:
-                    faction = self.faction_repository.find_by_id(action["faction_id"])
-                    if faction:
-                        logging.info(f"Faction {faction.name} (ID: {faction.id}) had no enemy penalties. Checking relationships:")
-                        for other_id in action_manager.get_all_faction_ids():
-                            if other_id != faction.id:
-                                other_faction = self.faction_repository.find_by_id(other_id)
-                                if other_faction:
-                                    rel = faction.get_relationship(other_id)
-                                    logging.info(f"  - Relationship with {other_faction.name}: {rel}")
+            # Use the new method to get enemy penalties
+            enemy_penalty, penalty_breakdown = action_manager._get_enemy_penalties(action["id"])
+            logging.info(f"Action {action['id']} enemy penalties: {enemy_penalty}, breakdown: {json.dumps(penalty_breakdown)}")
         except Exception as e:
-            logging.error(f"Error getting enemy penalty details for action {action['id']}: {str(e)}")
-            logging.exception(f"Full traceback for enemy penalty error in action {action['id']}:")
-            penalty_breakdown = []
+            logging.error(f"Error getting enemy penalties for action {action['id']}: {str(e)}")
+            logging.exception(f"Full traceback for enemy penalties error in action {action['id']}:")
+            enemy_penalty = 0
+            penalty_breakdown = {}
         
         if action["piece_type"] == "agent":
             agent = self.agent_repository.find_by_id(action["piece_id"])
@@ -1413,8 +1522,8 @@ class TurnPanel(ttk.Frame):
         
         # Log the roll calculation breakdown
         logging.info(f"Roll calculation for action {action['id']}: total={action['roll_result']}, base={base_roll}, " +
-                   f"attribute={attribute_bonus}, skill={skill_bonus}, aptitude={aptitude_bonus}, " +
-                   f"manual={manual_modifier}, conflict={-conflict_penalty}, enemy={-enemy_penalty}")
+                f"attribute={attribute_bonus}, skill={skill_bonus}, aptitude={aptitude_bonus}, " +
+                f"manual={manual_modifier}, conflict={-conflict_penalty}, enemy={-enemy_penalty}")
         
         # Format breakdown
         lines = []
@@ -1440,15 +1549,25 @@ class TurnPanel(ttk.Frame):
         
         # Add breakdown of enemy penalties if available
         if penalty_breakdown:
-            for penalty in penalty_breakdown:
-                source_type = penalty.get("source_type", "unknown")
-                source_name = penalty.get("source_name", "unknown")
-                penalty_value = penalty.get("penalty", 0)
-                reason = penalty.get("reason", "unknown")
-                lines.append(f"  - {source_type.title()} {source_name}: {-penalty_value:+d} ({reason})")
+            for source_key, penalty_value in penalty_breakdown.items():
+                parts = source_key.split('_')
+                source_type = parts[0]
+                source_id = '_'.join(parts[1:])
+                
+                source_name = "unknown"
+                if source_type == "agent":
+                    agent = self.agent_repository.find_by_id(source_id)
+                    if agent:
+                        source_name = agent.name
+                elif source_type == "squadron":
+                    squadron = self.squadron_repository.find_by_id(source_id)
+                    if squadron:
+                        source_name = squadron.name
+                        
+                lines.append(f"  - {source_type.title()} {source_name}: {-penalty_value:+d}")
         else:
             # If no enemy penalties, explain why
-            lines.append("  (No enemy penalties applied - no enemy factions with negative relationships in this district)")
+            lines.append("  (No enemy penalties applied)")
         
         # Add total
         lines.append(f"\nTotal Roll: {action['roll_result']}")
@@ -1821,8 +1940,21 @@ class TurnPanel(ttk.Frame):
         self.status_label.config(text="Status: Turn Complete")
         self.stop_button.config(state="disabled")
         
-        # Update UI state
-        self._update_ui_state()
+        # After completing turn, advance to next turn and reset to preparation phase
+        try:
+            # This will advance to the next turn and set the phase to preparation
+            self.turn_manager.advance_turn()
+            self._log_message(f"Advanced to next turn")
+            
+            # Update UI state - this will enable Process Turn Part 1 button 
+            self._update_ui_state()
+            
+            # Enable Process Turn Part 1 explicitly to ensure it's available
+            self.process_turn_part1_button.config(state="normal")
+            self.process_turn_part2_button.config(state="disabled")
+        except Exception as e:
+            logging.error(f"Error advancing turn: {str(e)}")
+            self._log_message(f"Error advancing turn: {str(e)}")
 
         # Check for map results
         if "map_results" in results:
@@ -1852,13 +1984,14 @@ class TurnPanel(ttk.Frame):
                     self._log_message(f"Map error: {error}")
             
         # Show results summary
+        next_turn = results['turn_number'] + 1
         summary = (
             f"Turn {results['turn_number']} Processing Complete\n\n"
             f"Actions Resolved: {results['action_results'].get('processed_actions', 0)}\n"
             f"Monitoring Reports Generated\n"
             f"Random Walk Updates Applied\n"
             f"Rumor DCs Decreased\n\n"
-            f"Turn {results['turn_number']+1} is ready to begin."
+            f"Turn {next_turn} is ready to begin."
         )
         
         messagebox.showinfo("Processing Complete", summary)
@@ -2302,3 +2435,319 @@ class TurnPanel(ttk.Frame):
                 subprocess.call(['xdg-open', map_path])
         except Exception as e:
             messagebox.showerror("Error", f"Error opening map: {str(e)}")
+
+    def _on_penalty_selected(self, event):
+        """Handle enemy penalty selection in the penalty tree."""
+        selection = self.enemy_penalty_tree.selection()
+        if not selection:
+            return
+        
+        # Get selected penalty action ID
+        action_id_short = self.enemy_penalty_tree.item(selection[0])["values"][0]
+        
+        # Find full action ID (since we only display the first 8 chars)
+        query = """
+            SELECT id
+            FROM actions 
+            WHERE id LIKE :prefix
+        """
+        
+        result = self.db_manager.execute_query(query, {"prefix": f"{action_id_short}%"})
+        if not result:
+            return
+            
+        action_id = result[0]["id"]
+        
+        # Get penalty details
+        query = """
+            SELECT ep.total_penalty, ep.penalty_breakdown,
+                a.piece_id, a.piece_type, a.faction_id, a.district_id
+            FROM enemy_penalties ep
+            JOIN actions a ON ep.action_id = a.id
+            WHERE ep.action_id = :action_id
+        """
+        
+        result = self.db_manager.execute_query(query, {"action_id": action_id})
+        if not result:
+            return
+            
+        penalty_data = dict(result[0])
+        
+        # Parse penalty breakdown
+        try:
+            breakdown = json.loads(penalty_data["penalty_breakdown"])
+        except:
+            breakdown = {}
+        
+        # Get piece details
+        piece_name = "Unknown"
+        piece_details = ""
+        
+        if penalty_data["piece_type"] == "agent":
+            agent = self.agent_repository.find_by_id(penalty_data["piece_id"])
+            if agent:
+                piece_name = agent.name
+                piece_details = f"Agent: {agent.name}"
+        elif penalty_data["piece_type"] == "squadron":
+            squadron = self.squadron_repository.find_by_id(penalty_data["piece_id"])
+            if squadron:
+                piece_name = squadron.name
+                piece_details = f"Squadron: {squadron.name}"
+        
+        # Get faction name
+        faction = self.faction_repository.find_by_id(penalty_data["faction_id"])
+        faction_name = faction.name if faction else "Unknown"
+        
+        # Get district name
+        district = self.district_repository.find_by_id(penalty_data["district_id"])
+        district_name = district.name if district else "Unknown"
+        
+        # Format penalty sources
+        source_details = []
+        for source_key, penalty_value in breakdown.items():
+            parts = source_key.split('_')
+            source_type = parts[0]
+            source_id = '_'.join(parts[1:])
+            
+            source_name = "Unknown"
+            if source_type == "agent":
+                agent = self.agent_repository.find_by_id(source_id)
+                source_name = agent.name if agent else "Unknown Agent"
+            elif source_type == "squadron":
+                squadron = self.squadron_repository.find_by_id(source_id)
+                source_name = squadron.name if squadron else "Unknown Squadron"
+            
+            # Get source faction
+            if source_type == "agent":
+                agent = self.agent_repository.find_by_id(source_id)
+                source_faction_id = agent.faction_id if agent else None
+            else:
+                squadron = self.squadron_repository.find_by_id(source_id)
+                source_faction_id = squadron.faction_id if squadron else None
+                
+            source_faction = self.faction_repository.find_by_id(source_faction_id) if source_faction_id else None
+            source_faction_name = source_faction.name if source_faction else "Unknown"
+            
+            # Add relationship info between factions
+            relationship = "Unknown"
+            if faction and source_faction:
+                rel_value = faction.get_relationship(source_faction_id)
+                if rel_value == -2:
+                    relationship = "Hot War (-2)"
+                elif rel_value == -1:
+                    relationship = "Cold War (-1)"
+                else:
+                    relationship = f"Relationship: {rel_value}"
+            
+            source_details.append(f"{source_type.title()} {source_name} ({source_faction_name}): -{penalty_value} ({relationship})")
+        
+        # Format details
+        details = (
+            f"Action ID: {action_id}\n"
+            f"Piece: {piece_details}\n"
+            f"Faction: {faction_name}\n"
+            f"District: {district_name}\n"
+            f"Total Penalty: -{penalty_data['total_penalty']}\n\n"
+            f"Penalty Sources:\n"
+            f"{chr(10).join('- ' + source for source in source_details)}"
+        )
+        
+        # Update details text
+        self.penalty_details_text.delete("1.0", "end")
+        self.penalty_details_text.insert("1.0", details)
+
+    def _reset_turn_processing(self):
+        """Reset the turn processing to the beginning."""
+        # Show confirmation dialog
+        if not messagebox.askyesno("Confirm Reset", "This will reset the turn processing to the beginning. Any progress in the current turn will be lost. Continue?"):
+            return
+        
+        try:
+            # Get current turn information
+            turn_info = self.turn_manager.get_current_turn()
+            turn_number = turn_info["current_turn"]
+            
+            # Log the reset action
+            self._log_message(f"Resetting turn {turn_number} processing to the beginning")
+            
+            # Stop any ongoing processing
+            self.processing_active = False
+            
+            # Wait for queue to clear
+            while not self.processing_queue.empty():
+                try:
+                    self.processing_queue.get_nowait()
+                    self.processing_queue.task_done()
+                except:
+                    pass
+            
+            # Reset the turn phase to preparation
+            self.turn_manager.set_current_phase("preparation")
+            
+            # Reset the action manager's penalty tracker
+            self.action_manager.reset_penalty_tracker()
+            
+            # Clear any temporary state
+            if hasattr(self, 'current_results'):
+                delattr(self, 'current_results')
+            
+            # Reset progress indicators
+            self.progress_var.set(0)
+            self.status_label.config(text="Status: Reset Complete")
+            
+            # Reset button states
+            self.process_turn_part1_button.config(state="normal")
+            self.process_turn_part2_button.config(state="disabled")
+            self.stop_button.config(state="disabled")
+            
+            # Delete conflicts that may be in progress
+            with self.db_manager.connection:
+                # Check if there are any pending conflicts for this turn
+                check_query = """
+                    SELECT COUNT(*) as conflict_count 
+                    FROM conflicts 
+                    WHERE turn_number = :turn_number AND resolution_status = 'pending'
+                """
+                result = self.db_manager.execute_query(check_query, {"turn_number": turn_number})
+                
+                if result and result[0]['conflict_count'] > 0:
+                    # Delete conflict factions
+                    self.db_manager.execute_update("""
+                        DELETE FROM conflict_factions 
+                        WHERE conflict_id IN (
+                            SELECT id FROM conflicts 
+                            WHERE turn_number = :turn_number AND resolution_status = 'pending'
+                        )
+                    """, {"turn_number": turn_number})
+                    
+                    # Delete conflict pieces
+                    self.db_manager.execute_update("""
+                        DELETE FROM conflict_pieces 
+                        WHERE conflict_id IN (
+                            SELECT id FROM conflicts 
+                            WHERE turn_number = :turn_number AND resolution_status = 'pending'
+                        )
+                    """, {"turn_number": turn_number})
+                    
+                    # Delete conflicts
+                    self.db_manager.execute_update("""
+                        DELETE FROM conflicts 
+                        WHERE turn_number = :turn_number AND resolution_status = 'pending'
+                    """, {"turn_number": turn_number})
+                    
+                    self._log_message(f"Deleted pending conflicts for turn {turn_number}")
+            
+            # Reset action roll results to null
+            with self.db_manager.connection:
+                # Check if there are actions with roll results
+                check_query = """
+                    SELECT COUNT(*) as action_count 
+                    FROM actions 
+                    WHERE turn_number = :turn_number AND roll_result IS NOT NULL
+                """
+                result = self.db_manager.execute_query(check_query, {"turn_number": turn_number})
+                
+                if result and result[0]['action_count'] > 0:
+                    self.db_manager.execute_update("""
+                        UPDATE actions 
+                        SET roll_result = NULL, 
+                            outcome_tier = NULL, 
+                            conflict_penalty = NULL,
+                            in_conflict = 0,
+                            conflict_id = NULL,
+                            updated_at = :now
+                        WHERE turn_number = :turn_number
+                    """, {"turn_number": turn_number, "now": datetime.now().isoformat()})
+                    
+                    self._log_message(f"Reset {result[0]['action_count']} action rolls for turn {turn_number}")
+            
+            # Clear any enemy penalties
+            with self.db_manager.connection:
+                # Check if enemy_penalties table exists
+                check_table_query = """
+                    SELECT name FROM sqlite_master 
+                    WHERE type='table' AND name='enemy_penalties'
+                """
+                table_exists = self.db_manager.execute_query(check_table_query)
+                
+                if table_exists:
+                    # Check if there are enemy penalties for this turn
+                    check_query = """
+                        SELECT COUNT(*) as penalty_count 
+                        FROM enemy_penalties 
+                        WHERE turn_number = :turn_number
+                    """
+                    result = self.db_manager.execute_query(check_query, {"turn_number": turn_number})
+                    
+                    if result and result[0]['penalty_count'] > 0:
+                        self.db_manager.execute_update("""
+                            DELETE FROM enemy_penalties 
+                            WHERE turn_number = :turn_number
+                        """, {"turn_number": turn_number})
+                        
+                        self._log_message(f"Deleted enemy penalties for turn {turn_number}")
+            
+            # Clear decay results if they exist
+            with self.db_manager.connection:
+                # Check if decay_results table exists
+                check_table_query = """
+                    SELECT name FROM sqlite_master 
+                    WHERE type='table' AND name='decay_results'
+                """
+                table_exists = self.db_manager.execute_query(check_table_query)
+                
+                if table_exists:
+                    # Check if there are decay results for this turn
+                    check_query = """
+                        SELECT COUNT(*) as decay_count 
+                        FROM decay_results 
+                        WHERE turn_number = :turn_number
+                    """
+                    result = self.db_manager.execute_query(check_query, {"turn_number": turn_number})
+                    
+                    if result and result[0]['decay_count'] > 0:
+                        # Store the current decay results for potential restoration
+                        decay_query = """
+                            SELECT district_id, faction_id, influence_change
+                            FROM decay_results
+                            WHERE turn_number = :turn_number
+                        """
+                        decay_records = self.db_manager.execute_query(decay_query, {"turn_number": turn_number})
+                        
+                        # Restore influence for each decay record
+                        for record in decay_records:
+                            district = self.district_repository.find_by_id(record['district_id'])
+                            if district:
+                                # Get current influence
+                                current_influence = district.get_faction_influence(record['faction_id'])
+                                # Restore the decayed influence (negate the influence_change which is negative)
+                                district.set_faction_influence(record['faction_id'], current_influence - record['influence_change'])
+                                # Save district
+                                self.district_repository.update(district)
+                        
+                        # Delete the decay records
+                        self.db_manager.execute_update("""
+                            DELETE FROM decay_results 
+                            WHERE turn_number = :turn_number
+                        """, {"turn_number": turn_number})
+                        
+                        self._log_message(f"Reverted influence decay for turn {turn_number} and deleted decay records")
+            
+            # Clear treeviews
+            for item in self.decay_tree.get_children():
+                self.decay_tree.delete(item)
+            
+            for item in self.action_roll_tree.get_children():
+                self.action_roll_tree.delete(item)
+            
+            for item in self.enemy_penalty_tree.get_children():
+                self.enemy_penalty_tree.delete(item)
+            
+            # Update UI to show current state
+            self._update_ui_state()
+            
+            # Notify user
+            messagebox.showinfo("Reset Complete", f"Turn {turn_number} processing has been reset to the beginning.")
+        except Exception as e:
+            logging.error(f"Error in _reset_turn_processing: {str(e)}")
+            messagebox.showerror("Error", f"Error resetting turn processing: {str(e)}")

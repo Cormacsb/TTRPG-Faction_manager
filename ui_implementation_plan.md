@@ -222,55 +222,125 @@ The turn workflow was designed to advance through phases linearly, but didn't pr
 - Add visual indicators showing which phases have been completed
 - Create a consolidated view option that shows a summary of all results
 
-## Enemy Penalty Tracking Fix
+## Conflict Resolution Improvements
 
-### Problem Identified:
-The enemy penalty system had several issues with how penalties were being applied during action resolution:
+### 1. Automatic Draw Selection
 
-1. Agents were applying penalties to multiple targets, when they should only apply one penalty total per turn
-2. Squadrons were applying penalties to more targets than their mobility allowed
-3. Penalties weren't being tracked between different action rolls during the action resolution phase
-4. There was no proper enforcement of maximum targets across all actions
+#### Problem:
+- In the conflict resolution UI, when selecting "Draw" as the resolution type, users still had to manually select which factions would be in a draw.
+- This was redundant and confusing, as in a draw situation, all involved factions should automatically be considered in a draw.
 
-### Root Cause:
-The penalty calculation was being handled independently for each action with no shared state between calls. The system was:
-1. Calculating penalties locally for each action without tracking previous penalties applied by the same piece
-2. Using a per-action "applied_agents" tracking list that reset between actions
-3. Applying the squadron mobility limits within a single action calculation but not across the entire phase
+#### Solution:
+- Modified the conflict resolution UI to automatically mark all factions as drawing when the "Draw" option is selected.
+- Removed the need for manual faction selection in draw resolutions.
 
-### Solution Implemented:
-1. Created a `PenaltyTracker` class to maintain state throughout the action resolution phase:
-   - Tracks which agents have already applied penalties
-   - Tracks how many penalties each squadron has applied based on mobility rules
-   - Provides methods to check if penalties can be applied and to record applications
+#### Implementation:
+- Updated `_apply_conflict_resolution` method in `TurnPanel` to:
+  - Automatically add all conflict factions to the draw_factions list when "draw" is selected
+  - Remove the validation check for selected factions in draw mode
+  - Simplify the user experience by removing an unnecessary selection step
+- Modified `_update_resolution_form` method to:
+  - Hide the draw factions selection listbox when in "draw" mode since it's no longer needed
+  - Keep the UI clear and focused on only the necessary inputs
 
-2. Updated the ActionManager:
-   - Added a penalty_tracker property initialized to None
-   - Added a reset_penalty_tracker method to create a fresh tracker at the beginning of action resolution
-   - Updated enemy penalty calculation methods to use the tracker
+### 2. Prevention of Pieces in Multiple Conflicts
 
-3. Modified the turn resolution process:
-   - Added code to reset the penalty tracker at the start of the action roll phase
-   - Ensured this reset happens before processing any actions
-   - Added logging to track penalty application throughout the phase
+#### Problem:
+- Pieces (agents/squadrons) could be assigned to multiple conflicts in the same turn
+- This caused unrealistic scenarios where a single piece could be involved in battles in different districts or multiple conflicts in the same district
 
-4. Updated squadron penalty tracking logic:
-   - Moved the max targets calculation into the PenaltyTracker class
-   - Implemented proper target slot allocation (same_district, adjacent_district, either_district)
-   - Added validation to ensure penalties respect mobility limitations
+#### Solution:
+- Implemented a check system to prevent pieces from being added to multiple conflicts in the same turn
+- Added logic that checks if a piece is already involved in a conflict before adding it to a new one
+
+#### Implementation:
+- Added a new helper method `_is_piece_in_conflict` to check if a piece is already in a conflict:
+  - Queries the conflict_pieces table joined with conflicts to check for existing conflicts in the current turn
+  - Returns true if the piece is already involved in any conflict
+- Updated the following methods to use this check:
+  - `_create_conflict`: Added check before adding initiating and target pieces
+  - `_add_target_faction_pieces`: Added check before adding target faction pieces
+  - `_detect_adjacent_participation`: Added check before adding squadrons from adjacent districts
+  - Refactored adjacent participation detection into a cleaner, more modular structure with:
+    - Simplified main detection loop 
+    - New helper method `_add_squadron_to_conflict` for better code organization
+- Added detailed logging to track which pieces are skipped due to being already in conflicts
 
 ### Benefits:
-- Agents now correctly apply only one penalty total across the entire action resolution phase
-- Squadrons respect their mobility limits when applying penalties across multiple targets
-- Penalties are applied fairly and consistently regardless of which actions are processed first
-- The system correctly enforces the specified game mechanics
+- More realistic conflict system where each piece can only participate in one conflict per turn
+- Simplified draw resolution with an intuitive "all factions draw" model
+- Improved data consistency by preventing unrealistic multiple-conflict participation
+- Better user experience with fewer required clicks to resolve conflicts
+- Cleaner, more maintainable code structure for the conflict resolution system
 
 ### Testing Verification:
-- Validated that the PenaltyTracker class correctly tracks applied penalties
-- Confirmed agents only apply their one penalty across the entire turn
-- Verified squadron penalty allocation based on mobility values
-- Checked penalty breakdown in roll results to ensure proper application
-- Confirmed that the tracker is properly reset at the beginning of each turn's action resolution phase
+- Confirmed that selecting "Draw" now automatically includes all involved factions
+- Verified that pieces already in conflicts are skipped when detecting new conflicts
+- Checked that adjacent district participation correctly respects the single-conflict rule
+- Validated that manual conflict initiation works properly with the new checks
+- Ensured the complete conflict resolution workflow functions as expected
+
+## Conflict Detection Enhancement
+
+### Problem:
+- Conflicts were being created even when one or both sides had no actual available pieces
+- This resulted in empty conflicts or conflicts with only one faction having pieces
+- Conflicts could be created even when all pieces were already assigned to other conflicts
+
+### Solution:
+- Implemented validation to ensure conflicts are only created when both participating factions have available pieces
+- Added checks to verify pieces aren't already involved in other conflicts before creating a new conflict
+- Enhanced all conflict detection mechanisms to validate piece availability
+
+### Implementation:
+1. **Availability Checking Helper:**
+   - Added new `_faction_has_available_pieces_in_district` method to check if a faction has any pieces available for conflict
+   - Method queries all faction pieces in a district and checks if any are not already in a conflict
+   - Provides a consistent way to verify piece availability before conflict creation
+
+2. **Manual Conflict Improvements:**
+   - Updated `_detect_manual_conflicts` to:
+     - Check if the initiating piece is already in another conflict
+     - Verify that the target faction has at least one available piece in the district
+     - Skip conflict creation if either condition fails
+     - Added detailed logging to track skipped conflicts
+
+3. **Relationship Conflict Improvements:**
+   - Enhanced `_create_relationship_conflict` to:
+     - Filter out pieces that are already in conflicts
+     - Build filtered lists of available pieces for both factions
+     - Only create conflicts when both sides have at least one available piece
+     - Use only available pieces when creating the conflict
+   - Updated `_detect_relationship_conflicts` to:
+     - Add preliminary check using `_faction_has_available_pieces_in_district`
+     - Skip conflict generation attempts when either faction lacks available pieces
+     - Use clearer variable names for better code readability
+
+4. **Target Conflict Improvements:**
+   - Modified `_detect_target_conflicts` to:
+     - Check if either piece involved is already in a different conflict
+     - Skip conflict creation if either piece is unavailable
+     - Add detailed logging when conflicts are skipped
+
+5. **Adjacent Participation Improvements:**
+   - Updated `_detect_adjacent_participation` to:
+     - Verify conflicts have at least 2 factions and 2 pieces before processing
+     - Skip adjacent participation for invalid or empty conflicts
+     - Continue checking if squadrons are already in conflicts before adding them
+
+### Benefits:
+- More realistic conflict system where conflicts only occur when there are actual opposing pieces
+- Prevented creation of invalid or nonsensical conflicts with missing participants
+- Improved system efficiency by avoiding processing empty conflicts
+- Better data consistency with conflicts always having proper representation from both sides
+- Enhanced logging makes it easier to understand which conflicts are being skipped and why
+
+### Testing:
+- Verified conflicts are only created when both sides have available pieces
+- Confirmed that pieces already in conflicts aren't assigned to additional conflicts
+- Tested that relationship conflicts properly filter for available pieces
+- Validated that target conflicts check piece availability correctly
+- Confirmed that adjacent district participation respects the availability rules
 
 ## Testing Approach
 
@@ -483,46 +553,6 @@ The penalty calculation was being handled independently for each action with no 
 - Validated that target conflicts check piece availability correctly
 - Confirmed that adjacent district participation respects the availability rules
 
-## Enemy Penalty Fix
-
-### Problem Identified
-- Enemy penalties were not being correctly applied to action rolls due to incorrect parameter binding in SQL queries
-- The SQL query was using `:faction_id` parameter when it should have been using `:enemy_id` 
-- The UI did not display enemy penalties clearly in the action roll breakdown
-- Users had no easy way to diagnose relationship issues between factions
-
-### Solution
-1. Fixed SQL query parameters in ActionManager:
-   - Updated `_calculate_enemy_agent_penalties` to correctly use the `enemy_id` parameter
-   - Updated `_calculate_enemy_squadron_penalties` to correctly use the `enemy_id` parameter
-   - Added enhanced error logging and debugging information
-
-2. Improved UI for enemy penalty display:
-   - Updated `_reconstruct_roll_breakdown` in TurnPanel to show enemy penalties even when zero
-   - Added explanatory text for why no enemy penalties were applied
-   - Improved formatting of the roll calculation display
-   - Added detailed breakdown of enemy penalties with source information
-
-3. Added diagnostic tools:
-   - Created a relationship diagnostic tool in the ActionPanel
-   - Added faction relationship matrix visualization
-   - Added enemy penalty calculation debugging
-   - Display pieces in shared districts with relationship status
-
-### Testing Approach
-1. Create negative relationships between factions
-2. Position agents/squadrons from enemy factions in the same district
-3. Create and execute actions with these agents
-4. Verify enemy penalties are correctly applied in the roll calculation
-5. Use the diagnostic tool to confirm relationships are correctly stored
-6. Check the detailed breakdown in the roll calculation view
-
-### Future Improvements
-- Add visual indicators in the district view for enemy factions
-- Add relationship tooltips when hovering over factions
-- Create a standalone relationship management panel
-- Add automated notifications when pieces from hostile factions occupy the same district
-
 ## Assignment Panel Improvements
 
 ### 1. Bulk Task Assignment Feature
@@ -677,3 +707,76 @@ The project has been successfully integrated with GitHub and is now available in
 - Create a more detailed Wiki with usage examples and tutorials
 - Configure GitHub Actions for CI/CD to run tests automatically
 - Consider creating releases for stable versions 
+
+# Turn Reset Functionality
+
+## Problem Identified
+- During turn processing, errors could occur that left the turn in an inconsistent state
+- If an error happened during conflict resolution or action rolls, there was no way to restart the process
+- Users were getting stuck in the middle of turn resolution with no recovery mechanism
+- Partial progress needed to be cleared to allow restarting the turn processing
+
+## Solution Implemented
+- Added a "Reset Turn Processing" button to the phase controls section in the turn panel
+- Implemented comprehensive reset functionality to restore turn state to the beginning of processing
+- Created database cleanup operations to revert any partial processing
+- Added user confirmation to prevent accidental resets
+
+## Implementation Details
+1. **User Interface Addition**:
+   - Added a new "Reset Turn Processing" button between the process buttons and progress indicators
+   - Designed the layout to make the button easily accessible but not accidentally clicked
+   - Added a confirmation dialog to prevent accidental data loss
+
+2. **Reset Process Implementation**:
+   - Added new `_reset_turn_processing` method to TurnPanel class
+   - Method performs the following cleanup operations:
+     - Sets the turn phase back to "preparation" using turn_manager
+     - Resets the action_manager's penalty tracker 
+     - Clears any temporary state in the TurnPanel
+     - Resets UI progress indicators and button states
+     - Removes any pending conflicts from the database
+     - Resets action roll results to null
+     - Clears enemy penalties from the database
+     - Reverts any influence decay that had been applied
+     - Clears all treeviews showing turn-related data
+
+3. **Data Restoration Logic**:
+   - For influence decay reversal:
+     - Retrieves all decay records for the current turn
+     - Restores the original influence levels by negating the stored change
+     - Removes the decay records from the database
+     - Ensures the district repository is updated with the restored values
+   - For conflict cleanup:
+     - Removes related entries from conflict_factions and conflict_pieces tables
+     - Deletes all pending conflicts for the current turn
+     - Updates actions to remove conflict associations
+
+4. **Error Handling**:
+   - Added comprehensive try/except handling throughout the reset process
+   - Implemented detailed logging to track reset operations
+   - Provided user feedback through the status label and message dialogs
+   - Ensures UI remains responsive throughout the reset process
+
+## Benefits
+- Provides a recovery mechanism when errors occur during turn processing
+- Allows users to restart from a clean state without losing their action assignments
+- Prevents the need to reload the application when turn processing gets stuck
+- Creates a consistent known state for troubleshooting issues
+- Improves overall application resilience and user experience
+- Logs detailed information about what was reset for debugging purposes
+
+## Testing Verification
+- Verified that the reset button appears correctly in the turn panel
+- Tested reset functionality after completing influence decay phase
+- Confirmed conflicts are properly deleted from the database
+- Verified action rolls are reset to null state
+- Checked that influence decay is properly reversed
+- Confirmed the UI correctly updates to show the reset state
+- Tested with various error scenarios to ensure proper recovery
+
+## Future Improvements
+- Add the ability to restore from automatic checkpoints at each phase
+- Create a more granular reset that can target specific phases
+- Implement an undo/redo system for turn actions
+- Add auto-save functionality before processing potentially risky operations 

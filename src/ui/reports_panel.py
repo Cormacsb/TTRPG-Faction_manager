@@ -69,6 +69,14 @@ class ReportsPanel(ttk.Frame):
         
         ttk.Radiobutton(
             report_type_frame, 
+            text="Consolidated Reports", 
+            variable=self.report_type, 
+            value="consolidated",
+            command=self._on_report_type_changed
+        ).pack(anchor="w", padx=5, pady=2)
+        
+        ttk.Radiobutton(
+            report_type_frame, 
             text="Turn History", 
             variable=self.report_type, 
             value="turn_history",
@@ -287,6 +295,8 @@ class ReportsPanel(ttk.Frame):
             self._load_monitoring_report()
         elif report_type == "weekly":
             self._load_weekly_report()
+        elif report_type == "consolidated":
+            self._load_consolidated_report()
         elif report_type == "turn_history":
             self._load_turn_history()
     
@@ -361,7 +371,32 @@ class ReportsPanel(ttk.Frame):
                     reports.append(report)
             else:
                 # Get all districts in selected turn
-                reports = self.monitoring_manager.get_faction_reports(faction_id, turn_number)
+                summary_reports = self.monitoring_manager.get_faction_reports(faction_id, turn_number)
+                
+                # For each summary report, load the full report data
+                for summary in summary_reports:
+                    report_id = summary.get("id")
+                    if report_id:
+                        # Get the full report data
+                        query = """
+                            SELECT id, district_id, faction_id, turn_number, report_json, confidence_rating, created_at
+                            FROM faction_monitoring_reports
+                            WHERE id = :report_id
+                        """
+                        
+                        results = self.db_manager.execute_query(query, {"report_id": report_id})
+                        
+                        if results:
+                            full_report = dict(results[0])
+                            
+                            # Parse JSON data
+                            full_report["data"] = json.loads(full_report["report_json"])
+                            del full_report["report_json"]
+                            
+                            # Add district name
+                            full_report["district_name"] = summary.get("district_name", "Unknown District")
+                            
+                            reports.append(full_report)
             
             # Clear text
             self.report_text.delete("1.0", "end")
@@ -409,34 +444,56 @@ class ReportsPanel(ttk.Frame):
             str: Formatted report text.
         """
         try:
-            # Get basic report info
-            district_name = report["district_name"]
-            confidence = report["confidence_rating"]
-            created_at = datetime.fromisoformat(report["created_at"]).strftime("%Y-%m-%d %H:%M:%S")
+            # Get report data - handle both direct and loaded formats
+            data = report
+            report_data = report.get("data", {}) if isinstance(report, dict) else {}
+            
+            # Get basic district info
+            district_id = data.get("district_id")
+            district = self.district_repository.find_by_id(district_id)
+            if not district:
+                return "Error: District not found"
+                
+            # Get faction info
+            faction_id = data.get("faction_id")
+            faction = self.faction_repository.find_by_id(faction_id)
+            if not faction:
+                return "Error: Faction not found"
+                
+            # Get report details
+            turn_number = data.get("turn_number")
+            confidence = data.get("confidence_rating", 0)
             
             # Format header
             header = (
-                f"District: {district_name}\n"
-                f"Confidence Rating: {confidence}/10\n"
-                f"Generated: {created_at}\n\n"
+                f"=== MONITORING REPORT ===\n"
+                f"Faction: {faction.name}\n"
+                f"District: {district.name}\n"
+                f"Turn: {turn_number}\n"
+                f"Confidence Rating: {confidence}/10\n\n"
             )
             
-            # Get report data
-            data = report["data"]
+            # Format influence values - Check both direct and nested formats
+            perceived_influences = data.get("perceived_influences") or report_data.get("perceived_influences", {})
+            phantom_detections = data.get("phantom_detections") or report_data.get("phantom_detections", [])
+            influence_text = "Faction Influence:\n"
             
-            # Format perceived influences
-            influences = data.get("perceived_influences", {})
-            phantom_detections = data.get("phantom_detections", [])
-            
-            influence_text = "Detected Faction Influence:\n"
-            
-            if not influences and not phantom_detections:
+            if not perceived_influences and not phantom_detections:
                 influence_text += "  No factions detected in this district.\n"
             else:
+                # Sort real factions by influence
+                sorted_factions = sorted(
+                    perceived_influences.items(), 
+                    key=lambda x: x[1],
+                    reverse=True
+                )
+                
                 # Format real factions
-                for faction_id, influence in influences.items():
+                for faction_id, influence in sorted_factions:
+                    # Get faction name
                     faction = self.faction_repository.find_by_id(faction_id)
                     faction_name = faction.name if faction else "Unknown Faction"
+                    
                     influence_text += f"  {faction_name}: {influence} influence\n"
                 
                 # Format phantom factions
@@ -446,8 +503,8 @@ class ReportsPanel(ttk.Frame):
                     faction_name = faction.name if faction else "Unknown Faction"
                     influence_text += f"  {faction_name}: {phantom['perceived_influence']} influence\n"
             
-            # Format district modifier
-            modifier = data.get("district_modifier")
+            # Format district modifier - Check both direct and nested formats
+            modifier = data.get("district_modifier") or report_data.get("district_modifier")
             modifier_text = "District Difficulty Modifier:\n"
             
             if not modifier:
@@ -463,17 +520,22 @@ class ReportsPanel(ttk.Frame):
                     sign = "+" if value > 0 else ""
                     modifier_text += f"  District has a {sign}{value} modifier to difficulty checks.\n"
             
-            # Format discovered rumors
-            rumors = data.get("discovered_rumors", [])
+            # Format discovered rumors - Check both direct and nested formats
+            rumors = data.get("discovered_rumors") or report_data.get("discovered_rumors", [])
             rumor_text = "Discovered Information:\n"
             
             if not rumors:
                 rumor_text += "  No new information discovered.\n"
             else:
+                # Ensure we're logging what we received to help debug
+                logging.info(f"Processing discovered_rumors: {rumors}")
+                
                 for rumor_id in rumors:
                     rumor = self.rumor_repository.find_by_id(rumor_id)
                     if rumor:
                         rumor_text += f"  • {rumor.rumor_text}\n"
+                    else:
+                        logging.warning(f"Could not find rumor with ID: {rumor_id}")
             
             # Combine all sections
             full_report = header + influence_text + "\n" + modifier_text + "\n" + rumor_text
@@ -728,3 +790,156 @@ class ReportsPanel(ttk.Frame):
         except Exception as e:
             logging.error(f"Error loading turn history: {str(e)}")
             messagebox.showerror("Error", f"Error loading turn history: {str(e)}")
+    
+    def _load_consolidated_report(self):
+        """Load and display the consolidated report for a faction."""
+        try:
+            # Get selected values
+            faction_name = self.faction_var.get()
+            turn_selection = self.turn_var.get()
+            
+            if not faction_name:
+                messagebox.showerror("Error", "Please select a faction")
+                return
+                
+            # Get faction ID
+            faction_id = self.faction_map.get(faction_name)
+            if not faction_id:
+                messagebox.showerror("Error", "Invalid faction selected")
+                return
+            
+            # Parse turn number (none for "All Turns")
+            turn_number = None
+            if turn_selection and turn_selection != "All Turns":
+                try:
+                    turn_number = int(turn_selection)
+                except ValueError:
+                    messagebox.showerror("Error", "Invalid turn number")
+                    return
+            
+            # Clear text
+            self.report_text.delete("1.0", "end")
+            
+            if turn_number is None:
+                # Get latest turn
+                query = """
+                    SELECT MAX(turn_number) as latest_turn
+                    FROM faction_monitoring_reports
+                    WHERE faction_id = :faction_id
+                """
+                
+                result = self.db_manager.execute_query(query, {"faction_id": faction_id})
+                if result and result[0]["latest_turn"] is not None:
+                    turn_number = result[0]["latest_turn"]
+                else:
+                    self.report_text.insert("end", "No monitoring reports found for this faction.")
+                    return
+            
+            # Generate consolidated report
+            consolidated_report = self.monitoring_manager.generate_consolidated_report(faction_id, turn_number)
+            
+            if "error" in consolidated_report:
+                self.report_text.insert("end", f"Error generating report: {consolidated_report['error']}")
+                return
+            
+            # Format report
+            report_text = self._format_consolidated_report(consolidated_report)
+            
+            # Display report
+            self.report_text.insert("end", report_text)
+            
+            # Scroll to top
+            self.report_text.see("1.0")
+            
+        except Exception as e:
+            logging.error(f"Error loading consolidated report: {str(e)}")
+            messagebox.showerror("Error", f"Error loading consolidated report: {str(e)}")
+            
+    def _format_consolidated_report(self, report):
+        """Format a consolidated report for display.
+        
+        Args:
+            report (dict): Consolidated report data.
+            
+        Returns:
+            str: Formatted report text.
+        """
+        try:
+            # Get basic report info
+            faction_name = report["faction_name"]
+            turn_number = report["turn_number"]
+            report_time = datetime.fromisoformat(report["report_time"]).strftime("%Y-%m-%d %H:%M:%S")
+            
+            # Format header
+            header = (
+                f"=== CONSOLIDATED INTELLIGENCE REPORT ===\n"
+                f"Faction: {faction_name}\n"
+                f"Turn: {turn_number}\n"
+                f"Generated: {report_time}\n\n"
+                f"This report focuses on district confidence ratings, modifiers, and new rumors discovered.\n\n"
+            )
+            
+            # Check if there are any districts in the report
+            if not report["districts"]:
+                return header + "No intelligence gathered this turn."
+            
+            # Process district information
+            district_sections = []
+            
+            # Log the full report structure for debugging
+            logging.info(f"Processing consolidated report: {json.dumps(report, default=str)}")
+            
+            for district_data in report["districts"]:
+                district_name = district_data["district_name"]
+                confidence = district_data["confidence_rating"]
+                
+                district_header = (
+                    f"--- {district_name} (Confidence: {confidence}/10) ---\n\n"
+                )
+                
+                # Log district data for debugging
+                logging.info(f"District data: {json.dumps(district_data, default=str)}")
+                
+                # Format district modifier
+                modifier = district_data.get("district_modifier")
+                modifier_text = ""
+                
+                if modifier:
+                    modifier_text = "District Conditions:\n"
+                    if modifier.get("direction_only", False):
+                        direction = modifier.get("direction", "unknown")
+                        modifier_text += f"  District appears to have a {direction} modifier to difficulty checks.\n\n"
+                    else:
+                        value = modifier.get("value", 0)
+                        if value == 0:
+                            modifier_text += "  District has normal difficulty conditions.\n\n"
+                        else:
+                            sign = "+" if value > 0 else ""
+                            modifier_text += f"  District has a {sign}{value} modifier to difficulty checks.\n\n"
+                
+                # Format discovered rumors
+                rumors = district_data.get("discovered_rumors", [])
+                rumor_text = ""
+                
+                # Log rumor data for debugging
+                logging.info(f"Rumors for district {district_name}: {len(rumors)}")
+                for rumor in rumors:
+                    logging.info(f"Rumor: {rumor}")
+                
+                if rumors:
+                    rumor_text = "New Intelligence:\n"
+                    for rumor in rumors:
+                        rumor_text += f"  • {rumor['rumor_text']}\n"
+                
+                # Combine district section - only include modifier text if it exists
+                district_section = district_header + modifier_text + rumor_text
+                district_sections.append(district_section)
+            
+            # Combine all sections
+            full_report = header + "\n".join(district_sections)
+            
+            return full_report
+            
+        except Exception as e:
+            logging.error(f"Error formatting consolidated report: {str(e)}")
+            return f"Error formatting report: {str(e)}"
