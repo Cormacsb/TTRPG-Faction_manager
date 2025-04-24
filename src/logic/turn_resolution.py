@@ -339,7 +339,7 @@ class TurnResolutionManager:
                 SELECT id, piece_id, piece_type, faction_id, district_id, 
                     action_type, target_faction_id, roll_result, in_conflict, conflict_id,
                     attribute_used, skill_used, aptitude_used, dc, manual_modifier,
-                    outcome_tier, conflict_penalty
+                    outcome_tier, conflict_penalty, action_description
                 FROM actions
                 WHERE turn_number = :turn_number
                 AND roll_result IS NOT NULL
@@ -392,6 +392,7 @@ class TurnResolutionManager:
                                     "faction_id": action["faction_id"],
                                     "district_id": action["district_id"],
                                     "action_type": action["action_type"],
+                                    "action_description": action.get("action_description"),
                                     "result": {
                                         "resolution": "failed",
                                         "result": "Action failed due to lost conflict"
@@ -473,6 +474,7 @@ class TurnResolutionManager:
                         "faction_id": action["faction_id"],
                         "district_id": action["district_id"],
                         "action_type": action["action_type"],
+                        "action_description": action.get("action_description"),
                         "result": result
                     })
                     

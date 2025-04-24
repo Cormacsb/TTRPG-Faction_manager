@@ -186,7 +186,7 @@ class AgentRepository(Repository):
             return False
     
     def update_task(self, agent_id, district_id, task_type, target_faction=None,
-                   attribute=None, skill=None, dc=None, monitoring=True, manual_modifier=0):
+                   attribute=None, skill=None, dc=None, monitoring=True, manual_modifier=0, description=None):
         """Update an agent's task.
         
         Args:
@@ -199,6 +199,7 @@ class AgentRepository(Repository):
             dc (int, optional): Difficulty class for the task. Defaults to None.
             monitoring (bool, optional): If the agent performs monitoring. Defaults to True.
             manual_modifier (int, optional): Manual modifier for the task. Defaults to 0.
+            description (str, optional): Description of the task. Defaults to None.
             
         Returns:
             bool: True if successful, False otherwise.
@@ -228,7 +229,8 @@ class AgentRepository(Repository):
                     "skill": skill,
                     "dc": dc,
                     "performs_monitoring": monitoring,
-                    "manual_modifier": manual_modifier
+                    "manual_modifier": manual_modifier,
+                    "description": description
                 }
                 
                 # Update agent record
@@ -267,12 +269,12 @@ class AgentRepository(Repository):
                 action_query = """
                     INSERT INTO actions (
                         id, turn_number, piece_id, piece_type, faction_id, district_id,
-                        action_type, target_faction_id, attribute_used, skill_used,
+                        action_type, action_description, target_faction_id, attribute_used, skill_used,
                         dc, manual_modifier, created_at, updated_at
                     )
                     VALUES (
                         :id, :turn_number, :piece_id, :piece_type, :faction_id, :district_id,
-                        :action_type, :target_faction_id, :attribute_used, :skill_used,
+                        :action_type, :action_description, :target_faction_id, :attribute_used, :skill_used,
                         :dc, :manual_modifier, :created_at, :updated_at
                     )
                 """
@@ -285,6 +287,7 @@ class AgentRepository(Repository):
                     'faction_id': agent.faction_id,
                     'district_id': district_id,
                     'action_type': task_type,
+                    'action_description': description,
                     'target_faction_id': target_faction,
                     'attribute_used': attribute,
                     'skill_used': skill,
@@ -303,7 +306,7 @@ class AgentRepository(Repository):
             return False
 
     def assign_task(self, agent_id, district_id, task_type, target_faction=None,
-                   attribute=None, skill=None, dc=None, monitoring=True, manual_modifier=0):
+                   attribute=None, skill=None, dc=None, monitoring=True, manual_modifier=0, description=None):
         """Assign a task to an agent. This is now a wrapper for update_task for backwards compatibility.
         
         Args:
@@ -316,12 +319,13 @@ class AgentRepository(Repository):
             dc (int, optional): Difficulty class for the task. Defaults to None.
             monitoring (bool, optional): If the agent performs monitoring. Defaults to True.
             manual_modifier (int, optional): Manual modifier for the task. Defaults to 0.
+            description (str, optional): Description of the task. Defaults to None.
             
         Returns:
             bool: True if successful, False otherwise.
         """
         return self.update_task(agent_id, district_id, task_type, target_faction,
-                              attribute, skill, dc, monitoring, manual_modifier)
+                              attribute, skill, dc, monitoring, manual_modifier, description)
     
     def clear_task(self, agent_id):
         """Clear an agent's current task.

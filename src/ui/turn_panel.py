@@ -166,9 +166,6 @@ class TurnPanel(ttk.Frame):
         self.phase_notebook.pack(fill="both", expand=True, padx=5, pady=5)
         
         # Create tabs for different phases
-        self.preparation_frame = ttk.Frame(self.phase_notebook)
-        self.phase_notebook.add(self.preparation_frame, text="Preparation")
-        
         self.influence_decay_frame = ttk.Frame(self.phase_notebook)
         self.phase_notebook.add(self.influence_decay_frame, text="Influence Decay")
         
@@ -187,8 +184,8 @@ class TurnPanel(ttk.Frame):
         self.action_resolution_frame = ttk.Frame(self.phase_notebook)
         self.phase_notebook.add(self.action_resolution_frame, text="Action Resolution")
         
-        self.monitoring_frame = ttk.Frame(self.phase_notebook)
-        self.phase_notebook.add(self.monitoring_frame, text="Monitoring")
+        self.influence_changes_frame = ttk.Frame(self.phase_notebook)
+        self.phase_notebook.add(self.influence_changes_frame, text="Influence Changes")
         
         self.map_update_frame = ttk.Frame(self.phase_notebook)
         self.phase_notebook.add(self.map_update_frame, text="Map Update")
@@ -197,12 +194,6 @@ class TurnPanel(ttk.Frame):
     
     def _initialize_phase_uis(self):
         """Initialize UI components for each phase."""
-        # Preparation phase UI
-        ttk.Label(
-            self.preparation_frame, 
-            text="The preparation phase initializes the turn process.\n\nNo specific actions are required."
-        ).pack(padx=10, pady=10)
-        
         # Influence decay phase UI
         influence_decay_frame = ttk.Frame(self.influence_decay_frame)
         influence_decay_frame.pack(fill="both", expand=True)
@@ -334,8 +325,18 @@ class TurnPanel(ttk.Frame):
         action_resolution_frame = ttk.Frame(self.action_resolution_frame)
         action_resolution_frame.pack(fill="both", expand=True)
         
+        # Create filter controls
+        filter_frame = ttk.Frame(action_resolution_frame)
+        filter_frame.grid(row=0, column=0, columnspan=2, sticky="ew", padx=5, pady=5)
+        
+        ttk.Label(filter_frame, text="Filter by Faction:").pack(side="left", padx=5)
+        self.faction_filter_var = tk.StringVar(value="All Factions")
+        self.faction_filter_combo = ttk.Combobox(filter_frame, textvariable=self.faction_filter_var, width=25)
+        self.faction_filter_combo.pack(side="left", padx=5)
+        self.faction_filter_combo.bind("<<ComboboxSelected>>", self._apply_faction_filter)
+        
         # Action results list
-        ttk.Label(action_resolution_frame, text="Action Results:").grid(row=0, column=0, sticky="w", padx=5, pady=5)
+        ttk.Label(action_resolution_frame, text="Action Results:").grid(row=1, column=0, sticky="w", padx=5, pady=5)
         
         self.action_result_tree = ttk.Treeview(
             action_resolution_frame, 
@@ -355,21 +356,40 @@ class TurnPanel(ttk.Frame):
         self.action_result_tree.column("piece", width=100)
         self.action_result_tree.column("district", width=100)
         self.action_result_tree.column("action_type", width=100)
-        self.action_result_tree.column("result", width=250)
+        self.action_result_tree.column("result", width=150)
         
-        self.action_result_tree.grid(row=1, column=0, sticky="nsew", padx=5, pady=5)
-        
-        action_resolution_frame.rowconfigure(1, weight=1)
-        action_resolution_frame.columnconfigure(0, weight=1)
+        self.action_result_tree.grid(row=2, column=0, sticky="nsew", padx=5, pady=5)
         
         # Add scrollbar
         action_result_scrollbar = ttk.Scrollbar(action_resolution_frame, orient="vertical", command=self.action_result_tree.yview)
         self.action_result_tree.configure(yscrollcommand=action_result_scrollbar.set)
-        action_result_scrollbar.grid(row=1, column=1, sticky="ns")
+        action_result_scrollbar.grid(row=2, column=1, sticky="ns")
+        
+        # Bind selection event
+        self.action_result_tree.bind("<<TreeviewSelect>>", self._on_action_result_selected)
+        
+        # Action details panel
+        details_frame = ttk.LabelFrame(action_resolution_frame, text="Action Details")
+        details_frame.grid(row=3, column=0, columnspan=2, sticky="nsew", padx=5, pady=5)
+        
+        self.action_details_text = tk.Text(details_frame, height=20, wrap="word")
+        self.action_details_text.pack(fill="both", expand=True, padx=5, pady=5)
+        details_scrollbar = ttk.Scrollbar(self.action_details_text, orient="vertical", command=self.action_details_text.yview)
+        self.action_details_text.configure(yscrollcommand=details_scrollbar.set)
+        details_scrollbar.pack(side="right", fill="y")
+        
+        # Set grid weights to make panels resizable
+        action_resolution_frame.rowconfigure(2, weight=2)  # Action results gets more space
+        action_resolution_frame.rowconfigure(3, weight=3)  # Details panel gets more space
+        action_resolution_frame.columnconfigure(0, weight=1)
+
+        # Influence changes tab
+        influence_changes_frame = ttk.Frame(self.influence_changes_frame)
+        influence_changes_frame.pack(fill="both", expand=True)
         
         # Influence changes section
-        influence_frame = ttk.LabelFrame(action_resolution_frame, text="Influence Changes")
-        influence_frame.grid(row=2, column=0, columnspan=2, sticky="nsew", padx=5, pady=5)
+        influence_frame = ttk.LabelFrame(influence_changes_frame, text="Influence Changes")
+        influence_frame.pack(fill="both", expand=True, padx=5, pady=5)
         
         self.influence_tree = ttk.Treeview(
             influence_frame, 
@@ -388,19 +408,9 @@ class TurnPanel(ttk.Frame):
         self.influence_tree.column("new_value", width=80)
         
         self.influence_tree.pack(padx=5, pady=5, fill="both", expand=True)
-
+        
         # Map update phase UI
         self._create_map_update_ui()
-
-        # Monitoring phase UI
-        monitoring_frame = ttk.Frame(self.monitoring_frame)
-        monitoring_frame.pack(fill="both", expand=True)
-        
-        ttk.Label(
-            monitoring_frame, 
-            text="Monitoring results are available through the Reports tab.\n\n"
-                 "Each faction receives intelligence reports based on their monitoring activities."
-        ).pack(padx=10, pady=10)
     
     def _create_conflict_resolution_ui(self):
         """Create the conflict resolution UI."""
@@ -544,25 +554,25 @@ class TurnPanel(ttk.Frame):
         # Create buttons for each important phase
         self.view_decay_button = ttk.Button(
             buttons_frame, text="Influence Decay", 
-            command=lambda: self.phase_notebook.select(1)
+            command=lambda: self.phase_notebook.select(0)
         )
         self.view_decay_button.pack(side="left", padx=2)
         
         self.view_rolls_button = ttk.Button(
             buttons_frame, text="Action Rolls", 
-            command=lambda: self.phase_notebook.select(4)
+            command=lambda: self.phase_notebook.select(3)
         )
         self.view_rolls_button.pack(side="left", padx=2)
         
         self.view_resolution_button = ttk.Button(
             buttons_frame, text="Action Resolution", 
-            command=lambda: self.phase_notebook.select(6)
+            command=lambda: self.phase_notebook.select(5)
         )
         self.view_resolution_button.pack(side="left", padx=2)
         
         self.view_monitoring_button = ttk.Button(
             buttons_frame, text="Monitoring", 
-            command=lambda: self.phase_notebook.select(7)
+            command=lambda: self.phase_notebook.select(6)
         )
         self.view_monitoring_button.pack(side="left", padx=2)
         
@@ -587,20 +597,36 @@ class TurnPanel(ttk.Frame):
     def _return_to_current_phase(self):
         """Return to the currently active phase tab."""
         phase = self.turn_info['current_phase']
+        
+        # Add debug logging to show all available tabs
+        tab_names = [self.phase_notebook.tab(i, "text") for i in range(self.phase_notebook.index("end"))]
+        logging.info(f"[UI_DEBUG] Available tabs: {', '.join(tab_names)}")
+        
+        # Use the same phase_to_tab mapping as in _update_ui_state
         phase_to_tab = {
             'preparation': 0,
-            'influence_decay': 1,
-            'assignment': 2,
-            'conflict_detection': 3,
-            'action_roll': 4,
-            'manual_conflict_resolution': 5,
-            'action_resolution': 6,
-            'monitoring': 7
+            'influence_decay': 0,  # Changed from 1 to 0 to match the actual tabs
+            'assignment': 1,       # Changed from 2 to 1
+            'conflict_detection': 2, # Changed from 3 to 2
+            'enemy_penalty': 3,      # Not used, but kept for consistency
+            'action_roll': 3,         # Changed from 5 to 3
+            'manual_conflict_resolution': 4, # Changed from 6 to 4
+            'action_resolution': 5,     # Changed from 7 to 5
+            'influence_changes': 6,
+            'map_update': 7,
+            'monitoring': 7  # Not used, but kept for consistency
         }
         
         if phase in phase_to_tab:
-            self.phase_notebook.select(phase_to_tab[phase])
+            tab_index = phase_to_tab[phase]
+            if tab_index < len(tab_names):
+                logging.info(f"[UI_DEBUG] Selecting tab index {tab_index} ({tab_names[tab_index]}) for phase: {phase}")
+                self.phase_notebook.select(tab_index)
+            else:
+                logging.error(f"[UI_DEBUG] Tab index {tab_index} out of range (max: {len(tab_names)-1})")
             logging.info(f"[UI_DEBUG] Returning to current phase tab: {phase}")
+        else:
+            logging.error(f"[UI_DEBUG] No tab mapping found for phase: {phase}")
     
     def _update_ui_state(self):
         """Update the UI state based on current phase."""
@@ -629,14 +655,16 @@ class TurnPanel(ttk.Frame):
         # Set active notebook tab based on phase
         phase_to_tab = {
             'preparation': 0,
-            'influence_decay': 1,
-            'assignment': 2,
-            'conflict_detection': 3,
-            'enemy_penalty': 4,
-            'action_roll': 5,
-            'manual_conflict_resolution': 6,
-            'action_resolution': 7,
-            'monitoring': 8
+            'influence_decay': 0,  # Matching actual tab index
+            'assignment': 1,
+            'conflict_detection': 2,
+            'enemy_penalty': 3,    # Not used, but kept for reference
+            'action_roll': 3,
+            'manual_conflict_resolution': 4,
+            'action_resolution': 5,
+            'influence_changes': 6,
+            'map_update': 7,
+            'monitoring': 7        # Not used, but kept for reference
         }
         
         if phase in phase_to_tab:
@@ -2010,18 +2038,41 @@ class TurnPanel(ttk.Frame):
         for item in self.influence_tree.get_children():
             self.influence_tree.delete(item)
         
+        # Clear details text
+        if hasattr(self, 'action_details_text'):
+            self.action_details_text.delete("1.0", "end")
+        
         # Check if results exist
         if not action_results or "results" not in action_results:
             return
         
+        # Debug logging
+        logging.info(f"DEBUG - Received action_results: {len(action_results.get('results', []))} results")
+        
         # Get results
         results = action_results.get("results", [])
+        
+        # Log sample for debugging
+        if results:
+            sample = results[0]
+            logging.info(f"DEBUG - Sample result keys: {list(sample.keys())}")
+            if "action_description" in sample:
+                logging.info(f"DEBUG - Sample action_description: '{sample['action_description']}'")
+            else:
+                logging.info("DEBUG - action_description NOT FOUND in result")
+        
+        # Store all results for filtering
+        self._all_action_results = []
+        
+        # Gather faction names for the filter dropdown
+        all_factions = set(["All Factions"])
         
         # Add results to treeview
         for result in results:
             # Get faction name
             faction = self.faction_repository.find_by_id(result["faction_id"])
             faction_name = faction.name if faction else "Unknown"
+            all_factions.add(faction_name)
             
             # Get district name
             district = self.district_repository.find_by_id(result["district_id"])
@@ -2039,6 +2090,18 @@ class TurnPanel(ttk.Frame):
             # Format action type
             action_type = result["action_type"].replace("_", " ").title()
             
+            # Store complete result for filtering
+            self._all_action_results.append({
+                "action_id": result["action_id"],
+                "faction_id": result["faction_id"],
+                "piece_id": result["piece_id"],
+                "piece_type": result["piece_type"],
+                "district_id": result["district_id"],
+                "action_type": result["action_type"],
+                "result": result["result"],
+                "action_description": result.get("action_description", None)
+            })
+            
             # Add to treeview
             self.action_result_tree.insert(
                 "", "end", values=(
@@ -2050,6 +2113,12 @@ class TurnPanel(ttk.Frame):
                     result["result"]
                 )
             )
+        
+        # Update faction filter dropdown
+        faction_list = sorted(list(all_factions))
+        if hasattr(self, 'faction_filter_combo'):
+            self.faction_filter_combo['values'] = faction_list
+            self.faction_filter_var.set("All Factions")
         
         # Display influence changes
         influence_changes = action_results.get("influence_changes", [])
@@ -2751,3 +2820,164 @@ class TurnPanel(ttk.Frame):
         except Exception as e:
             logging.error(f"Error in _reset_turn_processing: {str(e)}")
             messagebox.showerror("Error", f"Error resetting turn processing: {str(e)}")
+
+    def _on_action_result_selected(self, event):
+        """Handle action selection in the action results tree."""
+        selection = self.action_result_tree.selection()
+        if not selection:
+            return
+        
+        # Get selected action ID
+        action_id_short = self.action_result_tree.item(selection[0])["values"][0]
+        
+        # Find full action ID (since we only display the first 8 chars)
+        query = """
+            SELECT id
+            FROM actions 
+            WHERE id LIKE :prefix
+        """
+        
+        result = self.db_manager.execute_query(query, {"prefix": f"{action_id_short}%"})
+        if not result:
+            return
+            
+        action_id = result[0]["id"]
+        
+        # Get action details
+        query = """
+            SELECT a.*, f.name as faction_name, d.name as district_name,
+                   a.action_description
+            FROM actions a
+            JOIN factions f ON a.faction_id = f.id
+            JOIN districts d ON a.district_id = d.id
+            WHERE a.id = :action_id
+        """
+        
+        result = self.db_manager.execute_query(query, {"action_id": action_id})
+        if not result:
+            return
+            
+        action = dict(result[0])
+        
+        # Debug logging to help troubleshoot
+        logging.info(f"DEBUG - Action details for ID {action_id}: action_type={action['action_type']}")
+        logging.info(f"DEBUG - Action description value: '{action.get('action_description')}'")
+        
+        # Get piece details
+        piece_name = "Unknown"
+        piece_details = "No details available"
+        
+        if action["piece_type"] == "agent":
+            agent = self.agent_repository.find_by_id(action["piece_id"])
+            if agent:
+                piece_name = agent.name
+                piece_details = (
+                    f"Attributes: ATN:{agent.attunement} INT:{agent.intellect} "
+                    f"FIN:{agent.finesse} MIG:{agent.might} PRE:{agent.presence}\n"
+                    f"Skills: INF:{agent.infiltration} PER:{agent.persuasion} "
+                    f"COM:{agent.combat} STR:{agent.streetwise} SUR:{agent.survival} "
+                    f"ART:{agent.artifice} ARC:{agent.arcana}"
+                )
+        elif action["piece_type"] == "squadron":
+            squadron = self.squadron_repository.find_by_id(action["piece_id"])
+            if squadron:
+                piece_name = squadron.name
+                piece_details = (
+                    f"Mobility: {squadron.mobility}\n"
+                    f"Aptitudes: COM:{squadron.combat_aptitude} UND:{squadron.underworld_aptitude} "
+                    f"SOC:{squadron.social_aptitude} TEC:{squadron.technical_aptitude}\n"
+                    f"LAB:{squadron.labor_aptitude} ARC:{squadron.arcane_aptitude} "
+                    f"WIL:{squadron.wilderness_aptitude} MON:{squadron.monitoring_aptitude}"
+                )
+        
+        # Get target faction name if applicable
+        target_faction_name = "None"
+        if action["target_faction_id"]:
+            target_faction = self.faction_repository.find_by_id(action["target_faction_id"])
+            target_faction_name = target_faction.name if target_faction else "Unknown"
+        
+        # Get actual roll details
+        roll_value = action.get("roll_result", "N/A")
+        dc = action.get("dc", "N/A")
+        outcome = action.get("outcome_tier", "Unknown")
+        
+        # Format the action description for display
+        action_description = None
+        if "action_description" in action and action["action_description"]:
+            action_description = action["action_description"]
+        
+        # Format roll details
+        details = (
+            f"Action ID: {action_id}\n"
+            f"Type: {action['action_type'].replace('_', ' ').title()}\n"
+            f"Piece: {action['piece_type'].title()} - {piece_name}\n"
+            f"Faction: {action['faction_name']}\n"
+            f"District: {action['district_name']}\n"
+            f"Target Faction: {target_faction_name}\n\n"
+        )
+        
+        # Always show description for all action types, especially freeform
+        if action_description:
+            details += f"Description: {action_description}\n\n"
+        
+        details += (
+            f"------- RESULT DETAILS -------\n"
+            f"Roll: {roll_value}\n"
+            f"DC: {dc}\n"
+            f"Outcome: {outcome}\n\n"
+        )
+        
+        # Add piece details
+        details += f"------- PIECE DETAILS -------\n{piece_details}"
+        
+        # Update details text
+        self.action_details_text.delete("1.0", "end")
+        self.action_details_text.insert("1.0", details)
+
+    def _apply_faction_filter(self, event=None):
+        """Filter action results by selected faction."""
+        selected_faction = self.faction_filter_var.get()
+        
+        if not hasattr(self, '_all_action_results'):
+            # If we haven't stored all results yet, nothing to filter
+            return
+        
+        # Clear existing data
+        for item in self.action_result_tree.get_children():
+            self.action_result_tree.delete(item)
+        
+        # Apply filter
+        for result in self._all_action_results:
+            # Get faction name
+            faction = self.faction_repository.find_by_id(result["faction_id"])
+            faction_name = faction.name if faction else "Unknown"
+            
+            # Apply filter
+            if selected_faction == "All Factions" or faction_name == selected_faction:
+                # Get district name
+                district = self.district_repository.find_by_id(result["district_id"])
+                district_name = district.name if district else "Unknown"
+                
+                # Get piece name
+                piece_name = "Unknown"
+                if result["piece_type"] == "agent":
+                    agent = self.agent_repository.find_by_id(result["piece_id"])
+                    piece_name = agent.name if agent else "Unknown"
+                elif result["piece_type"] == "squadron":
+                    squadron = self.squadron_repository.find_by_id(result["piece_id"])
+                    piece_name = squadron.name if squadron else "Unknown"
+                
+                # Format action type
+                action_type = result["action_type"].replace("_", " ").title()
+                
+                # Add to treeview
+                self.action_result_tree.insert(
+                    "", "end", values=(
+                        result["action_id"][:8],
+                        faction_name,
+                        f"{result['piece_type'].title()}: {piece_name}",
+                        district_name,
+                        action_type,
+                        result["result"]
+                    )
+                )

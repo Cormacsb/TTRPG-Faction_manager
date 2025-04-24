@@ -874,13 +874,13 @@ class AssignmentPanel(ttk.Frame):
             if self.selected_piece_type == "agent":
                 success = self.agent_repository.update_task(
                     self.selected_piece.id, district_id, task_type, target_faction_id,
-                    attribute, skill, dc, True, manual_modifier
+                    attribute, skill, dc, True, manual_modifier, description
                 )
             else:  # Squadron
                 # For squadrons, always set monitoring=True for secondary monitoring
                 success = self.squadron_repository.update_task(
                     self.selected_piece.id, district_id, task_type, target_faction_id,
-                    aptitude, dc, True, manual_modifier
+                    aptitude, dc, True, manual_modifier, description
                 )
             
             if success:
@@ -1026,11 +1026,12 @@ class AssignmentPanel(ttk.Frame):
                 skill = task.get("skill")
                 dc = task.get("dc")
                 manual_modifier = task.get("manual_modifier", 0)
+                description = task.get("description")
                 
                 # Update the task
                 success = self.agent_repository.update_task(
                     agent.id, district_id, task_type, target_faction_id,
-                    attribute, skill, dc, True, manual_modifier
+                    attribute, skill, dc, True, manual_modifier, description
                 )
                 
                 if success:
@@ -1052,11 +1053,12 @@ class AssignmentPanel(ttk.Frame):
                 aptitude = task.get("primary_aptitude")
                 dc = task.get("dc")
                 manual_modifier = task.get("manual_modifier", 0)
+                description = task.get("description")
                 
                 # Update the task
                 success = self.squadron_repository.update_task(
                     squadron.id, district_id, task_type, target_faction_id,
-                    aptitude, dc, True, manual_modifier
+                    aptitude, dc, True, manual_modifier, description
                 )
                 
                 if success:

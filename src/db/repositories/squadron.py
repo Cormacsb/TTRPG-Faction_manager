@@ -184,7 +184,7 @@ class SquadronRepository(Repository):
             return False
     
     def update_task(self, squadron_id, district_id, task_type, target_faction=None,
-                   primary_aptitude=None, dc=None, monitoring=True, manual_modifier=0):
+                   primary_aptitude=None, dc=None, monitoring=True, manual_modifier=0, description=None):
         """Update a squadron's task.
         
         Args:
@@ -196,6 +196,7 @@ class SquadronRepository(Repository):
             dc (int, optional): Difficulty class for the task. Defaults to None.
             monitoring (bool, optional): If the squadron performs monitoring. Defaults to True.
             manual_modifier (int, optional): Manual modifier for the task. Defaults to 0.
+            description (str, optional): Description of the task. Defaults to None.
             
         Returns:
             bool: True if successful, False otherwise.
@@ -224,7 +225,8 @@ class SquadronRepository(Repository):
                     "primary_aptitude": primary_aptitude,
                     "dc": dc,
                     "performs_monitoring": monitoring,
-                    "manual_modifier": manual_modifier
+                    "manual_modifier": manual_modifier,
+                    "description": description
                 }
                 
                 # Update squadron record
@@ -263,12 +265,12 @@ class SquadronRepository(Repository):
                 action_query = """
                     INSERT INTO actions (
                         id, turn_number, piece_id, piece_type, faction_id, district_id,
-                        action_type, target_faction_id, aptitude_used,
+                        action_type, action_description, target_faction_id, aptitude_used,
                         dc, manual_modifier, created_at, updated_at
                     )
                     VALUES (
                         :id, :turn_number, :piece_id, :piece_type, :faction_id, :district_id,
-                        :action_type, :target_faction_id, :aptitude_used,
+                        :action_type, :action_description, :target_faction_id, :aptitude_used,
                         :dc, :manual_modifier, :created_at, :updated_at
                     )
                 """
@@ -281,6 +283,7 @@ class SquadronRepository(Repository):
                     'faction_id': squadron.faction_id,
                     'district_id': district_id,
                     'action_type': task_type,
+                    'action_description': description,
                     'target_faction_id': target_faction,
                     'aptitude_used': primary_aptitude,
                     'dc': dc,
@@ -298,7 +301,7 @@ class SquadronRepository(Repository):
             return False
 
     def assign_task(self, squadron_id, district_id, task_type, target_faction=None,
-                   primary_aptitude=None, dc=None, monitoring=True, manual_modifier=0):
+                   primary_aptitude=None, dc=None, monitoring=True, manual_modifier=0, description=None):
         """Assign a task to a squadron. This is now a wrapper for update_task for backwards compatibility.
         
         Args:
@@ -310,12 +313,13 @@ class SquadronRepository(Repository):
             dc (int, optional): Difficulty class for the task. Defaults to None.
             monitoring (bool, optional): If the squadron performs monitoring. Defaults to True.
             manual_modifier (int, optional): Manual modifier for the task. Defaults to 0.
+            description (str, optional): Description of the task. Defaults to None.
             
         Returns:
             bool: True if successful, False otherwise.
         """
         return self.update_task(squadron_id, district_id, task_type, target_faction,
-                              primary_aptitude, dc, monitoring, manual_modifier)
+                              primary_aptitude, dc, monitoring, manual_modifier, description)
     
     def clear_task(self, squadron_id):
         """Clear a squadron's current task.

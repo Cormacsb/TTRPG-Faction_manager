@@ -891,29 +891,58 @@ class MonitoringManager:
             if not eligible_faction_ids:
                 return []  # No eligible factions for phantom detection
             
-            # Weight factions in adjacent districts higher
+            # Find factions in adjacent districts
             adjacent_faction_ids = set()
             for adjacent_id in district.adjacent_districts:
                 adjacent_district = self.district_repository.find_by_id(adjacent_id)
                 if adjacent_district:
                     adjacent_faction_ids.update(adjacent_district.faction_influence.keys())
             
+            # Remove factions present in current district from adjacent_faction_ids
+            adjacent_faction_ids = adjacent_faction_ids - set(present_faction_ids)
+            
+            # Split eligible factions into two groups: those in adjacent districts and others
+            adjacent_eligible = [f for f in eligible_faction_ids if f in adjacent_faction_ids]
+            other_eligible = [f for f in eligible_faction_ids if f not in adjacent_faction_ids]
+            
             # Generate phantom detections
             for _ in range(num_phantoms):
                 if not eligible_faction_ids:
                     break  # No more eligible factions
                 
-                # Weight adjacent factions higher
-                weights = []
-                for faction_id in eligible_faction_ids:
-                    if faction_id in adjacent_faction_ids:
-                        weight = self._get_adjacent_weight_multiplier(quality_tier)
-                    else:
-                        weight = 1.0
-                    weights.append(weight)
+                # Decide whether to prioritize adjacent factions
+                # Higher quality tiers should be more accurate in detecting patterns from adjacent districts
+                prioritize_adjacent = (random.random() < 0.8)  # 80% chance to prioritize adjacent factions
                 
-                # Select a phantom faction with weighted probability
-                phantom_faction_id = random.choices(eligible_faction_ids, weights=weights, k=1)[0]
+                if prioritize_adjacent and adjacent_eligible:
+                    # Select from adjacent factions with weighted probability
+                    weights = [self._get_adjacent_weight_multiplier(quality_tier) for _ in adjacent_eligible]
+                    phantom_faction_id = random.choices(adjacent_eligible, weights=weights, k=1)[0]
+                    
+                    # Remove from both lists
+                    adjacent_eligible.remove(phantom_faction_id)
+                    eligible_faction_ids.remove(phantom_faction_id)
+                    if phantom_faction_id in other_eligible:
+                        other_eligible.remove(phantom_faction_id)
+                else:
+                    # Weight adjacent factions higher even in the mixed pool
+                    weights = []
+                    for faction_id in eligible_faction_ids:
+                        if faction_id in adjacent_faction_ids:
+                            weight = self._get_adjacent_weight_multiplier(quality_tier)
+                        else:
+                            weight = 1.0
+                        weights.append(weight)
+                    
+                    # Select a phantom faction with weighted probability
+                    phantom_faction_id = random.choices(eligible_faction_ids, weights=weights, k=1)[0]
+                    
+                    # Remove from all relevant lists
+                    eligible_faction_ids.remove(phantom_faction_id)
+                    if phantom_faction_id in adjacent_eligible:
+                        adjacent_eligible.remove(phantom_faction_id)
+                    elif phantom_faction_id in other_eligible:
+                        other_eligible.remove(phantom_faction_id)
                 
                 # Determine phantom influence value
                 phantom_influence = self._get_phantom_influence_value(quality_tier)
@@ -923,9 +952,6 @@ class MonitoringManager:
                     "faction_id": phantom_faction_id,
                     "perceived_influence": phantom_influence
                 })
-                
-                # Remove from eligible factions for next phantom
-                eligible_faction_ids.remove(phantom_faction_id)
             
             return phantom_detections
         except Exception as e:

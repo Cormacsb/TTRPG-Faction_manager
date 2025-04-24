@@ -1,7 +1,6 @@
-rumors
-false factions being first from factions present in adjacent districts but not the given district
-freeform resolution tab giving the description
-sort action resolution by faction
 
+##Other programs
+inventory
 
+##Stretch goals
 balancing tab
